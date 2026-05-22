@@ -33,7 +33,7 @@ import uuid
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import Request as UrllibRequest, urlopen
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
@@ -596,7 +596,7 @@ def connector_oauth_callback(
             "Accept": "application/json",
             "Content-Type": "application/x-www-form-urlencoded",
         }
-        http_req = Request(
+        http_req = UrllibRequest(
             pending["token_url"],
             data=urlencode(token_body).encode("utf-8"),
             headers=request_headers,
