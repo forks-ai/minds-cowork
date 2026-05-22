@@ -63,6 +63,33 @@ GMAIL_OAUTH_SCOPES = (
 )
 GMAIL_OAUTH_STATE_KEY = "gmail_oauth"
 
+GOOGLE_ADS_ENGINE = "google_ads"
+GOOGLE_ADS_OAUTH_SCOPES = (
+    "openid",
+    "email",
+    "profile",
+    "https://www.googleapis.com/auth/adwords",
+)
+GOOGLE_ADS_OAUTH_STATE_KEY = "google_ads_oauth"
+
+GOOGLE_ANALYTICS_ENGINE = "google_analytics_4"
+GOOGLE_ANALYTICS_OAUTH_SCOPES = (
+    "openid",
+    "email",
+    "profile",
+    "https://www.googleapis.com/auth/analytics.readonly",
+)
+GOOGLE_ANALYTICS_OAUTH_STATE_KEY = "google_analytics_oauth"
+
+GCP_ENGINE = "gcp"
+GCP_OAUTH_SCOPES = (
+    "openid",
+    "email",
+    "profile",
+    "https://www.googleapis.com/auth/cloud-platform",
+)
+GCP_OAUTH_STATE_KEY = "gcp_oauth"
+
 GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_ENDPOINT = "https://openidconnect.googleapis.com/v1/userinfo"
@@ -313,6 +340,13 @@ GOOGLE_CALENDAR_CLIENT_ID     = os.environ.get("GOOGLE_CALENDAR_CLIENT_ID", "") 
 GOOGLE_CALENDAR_CLIENT_SECRET = os.environ.get("GOOGLE_CALENDAR_CLIENT_SECRET", "") or GOOGLE_CLIENT_SECRET
 GMAIL_CLIENT_ID     = os.environ.get("GMAIL_CLIENT_ID", "")     or GOOGLE_CLIENT_ID
 GMAIL_CLIENT_SECRET = os.environ.get("GMAIL_CLIENT_SECRET", "") or GOOGLE_CLIENT_SECRET
+
+GOOGLE_ADS_CLIENT_ID     = os.environ.get("GOOGLE_ADS_CLIENT_ID", "")     or GOOGLE_CLIENT_ID
+GOOGLE_ADS_CLIENT_SECRET = os.environ.get("GOOGLE_ADS_CLIENT_SECRET", "") or GOOGLE_CLIENT_SECRET
+GOOGLE_ANALYTICS_CLIENT_ID     = os.environ.get("GOOGLE_ANALYTICS_CLIENT_ID", "")     or GOOGLE_CLIENT_ID
+GOOGLE_ANALYTICS_CLIENT_SECRET = os.environ.get("GOOGLE_ANALYTICS_CLIENT_SECRET", "") or GOOGLE_CLIENT_SECRET
+GCP_CLIENT_ID     = os.environ.get("GCP_CLIENT_ID", "")     or GOOGLE_CLIENT_ID
+GCP_CLIENT_SECRET = os.environ.get("GCP_CLIENT_SECRET", "") or GOOGLE_CLIENT_SECRET
 
 
 def _make_oauth_config(client_id: str, client_secret: str) -> dict[str, str | bool]:
@@ -603,7 +637,7 @@ def _google_calendar_oauth_connections(vault) -> list[dict[str, Any]]:
     return connections
 
 
-def _calendar_integration_item(vault) -> dict[str, Any]:
+def _google_calendar_integration_item(vault) -> dict[str, Any]:
     oauth_config = _google_calendar_oauth_config()
     oauth_meta = _google_calendar_oauth_meta()
     calendar_connections = _google_calendar_oauth_connections(vault)
@@ -630,7 +664,7 @@ def _calendar_integration_item(vault) -> dict[str, Any]:
     }
 
 
-def _integration_item(vault) -> dict[str, Any]:
+def _google_drive_integration_item(vault) -> dict[str, Any]:
     oauth_config = _google_oauth_config()
     oauth_meta = _google_oauth_meta()
     drive_connections = _google_drive_oauth_connections(vault)
@@ -673,7 +707,14 @@ async def list_integrations():
         raise HTTPException(status_code=503, detail="Anton integration catalogue is unavailable") from exc
 
     vault = LocalDataVault()
-    return {"items": [_integration_item(vault), _calendar_integration_item(vault), _gmail_integration_item(vault)]}
+    return {"items": [
+        _google_drive_integration_item(vault),
+        _google_calendar_integration_item(vault),
+        _gmail_integration_item(vault),
+        _google_ads_integration_item(vault),
+        _google_analytics_integration_item(vault),
+        _gcp_integration_item(vault),
+    ]}
 
 
 @router.post("/google-drive/oauth/start")
@@ -1385,6 +1426,678 @@ async def gmail_oauth_callback(
     _clear_gmail_oauth_pending(lastError="", lastErrorAt="", lastSuccessAt=_iso_now())
     return _callback_page(
         "Gmail connected",
+        f"{account_name or account_email or 'Your Google account'} is now connected. You can close this tab and return to Anton CoWork.",
+        success=True,
+    )
+
+
+# ── Google Ads OAuth ──────────────────────────────────────────────────────────
+
+def _google_ads_oauth_config() -> dict[str, str | bool]:
+    return _make_oauth_config(GOOGLE_ADS_CLIENT_ID, GOOGLE_ADS_CLIENT_SECRET)
+
+
+def _google_ads_redirect_uri() -> str:
+    return f"{_server_origin()}/v1/integrations/google-ads/oauth/callback"
+
+
+def _google_ads_oauth_meta() -> dict[str, Any]:
+    state = load_state()
+    utility_state = state.get("utility_state") if isinstance(state, dict) else {}
+    meta = utility_state.get(GOOGLE_ADS_OAUTH_STATE_KEY) if isinstance(utility_state, dict) else {}
+    if not isinstance(meta, dict):
+        meta = {}
+    if not isinstance(meta.get("pending"), dict):
+        meta["pending"] = {}
+    return meta
+
+
+def _write_google_ads_oauth_meta(**updates: Any) -> dict[str, Any]:
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        utility_state = state.setdefault("utility_state", {})
+        meta = utility_state.get(GOOGLE_ADS_OAUTH_STATE_KEY)
+        if not isinstance(meta, dict):
+            meta = {}
+        meta.update(updates)
+        if not isinstance(meta.get("pending"), dict):
+            meta["pending"] = {}
+        utility_state[GOOGLE_ADS_OAUTH_STATE_KEY] = meta
+        return dict(meta)
+    return update_state(mutate)
+
+
+def _clear_google_ads_oauth_pending(**updates: Any) -> dict[str, Any]:
+    return _write_google_ads_oauth_meta(pending={}, **updates)
+
+
+def _google_ads_oauth_connections(vault) -> list[dict[str, Any]]:
+    connections = []
+    try:
+        items = vault.list_connections()
+    except Exception:
+        logger.warning("Could not list vault connections for Google Ads", exc_info=True)
+        return connections
+    for item in items:
+        if item.get("engine") != GOOGLE_ADS_ENGINE or not item.get("name"):
+            continue
+        try:
+            fields = vault.load(GOOGLE_ADS_ENGINE, item["name"]) or {}
+        except Exception:
+            logger.warning("Skipping unreadable vault entry %s/%s", GOOGLE_ADS_ENGINE, item["name"])
+            continue
+        if fields.get("auth_type") != "oauth":
+            continue
+        display_name = fields.get("account_name", "").strip() or fields.get("account_email", "").strip() or item["name"]
+        subtitle = fields.get("account_email", "").strip() or item["name"]
+        connections.append({
+            "engine": GOOGLE_ADS_ENGINE,
+            "name": item["name"],
+            "slug": f"{GOOGLE_ADS_ENGINE}-{item['name']}",
+            "label": display_name,
+            "subtitle": subtitle,
+            "connectedVia": "browser_oauth",
+            "createdAt": item.get("created_at", ""),
+        })
+    return connections
+
+
+def _google_ads_integration_item(vault) -> dict[str, Any]:
+    oauth_config = _google_ads_oauth_config()
+    oauth_meta = _google_ads_oauth_meta()
+    connections = _google_ads_oauth_connections(vault)
+    return {
+        "id": GOOGLE_ADS_ENGINE,
+        "title": "Google Ads",
+        "engine": GOOGLE_ADS_ENGINE,
+        "status": "connected" if connections else ("available" if oauth_config["ready"] else "needs_config"),
+        "description": "Connect your Google Ads account so Anton can read and manage ad campaigns and performance data.",
+        "setupMode": "browser_oauth",
+        "connections": connections,
+        "connectionCount": len(connections),
+        "engineAvailable": True,
+        "oauth": {
+            "ready": oauth_config["ready"],
+            "configError": oauth_config["error"],
+            "pending": bool(oauth_meta.get("pending")),
+            "lastSuccessAt": oauth_meta.get("lastSuccessAt", ""),
+            "lastError": oauth_meta.get("lastError", ""),
+            "lastErrorAt": oauth_meta.get("lastErrorAt", ""),
+            "launchLabel": "Connect Google Ads",
+            "redirectUri": _google_ads_redirect_uri(),
+        },
+    }
+
+
+@router.post("/google-ads/oauth/start")
+async def start_google_ads_oauth():
+    oauth_config = _google_ads_oauth_config()
+    if not oauth_config["ready"]:
+        raise HTTPException(status_code=400, detail=str(oauth_config["error"]))
+
+    verifier = _pkce_verifier()
+    challenge = _pkce_challenge(verifier)
+    started_at = _iso_now()
+    state = secrets.token_urlsafe(24)
+    redirect_uri = _google_ads_redirect_uri()
+
+    _write_google_ads_oauth_meta(
+        pending={"state": state, "verifier": verifier, "redirectUri": redirect_uri, "startedAt": started_at},
+        lastError="",
+        lastErrorAt="",
+    )
+
+    auth_url = (
+        f"{GOOGLE_AUTH_ENDPOINT}?"
+        + urlencode({
+            "client_id": oauth_config["client_id"],
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "access_type": "offline",
+            "prompt": "consent",
+            "scope": " ".join(GOOGLE_ADS_OAUTH_SCOPES),
+            "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        })
+    )
+    return {"status": "ok", "authUrl": auth_url, "redirectUri": redirect_uri, "startedAt": started_at}
+
+
+@router.get("/google-ads/oauth/callback")
+async def google_ads_oauth_callback(
+    code: str = Query(default=""),
+    state: str = Query(default=""),
+    error: str = Query(default=""),
+):
+    oauth_meta = _google_ads_oauth_meta()
+    pending = oauth_meta.get("pending") or {}
+    if error:
+        _clear_google_ads_oauth_pending(lastError=f"Google sign-in returned: {error}", lastErrorAt=_iso_now())
+        return _callback_page("Google Ads connection was cancelled", "You can return to Anton CoWork and try again.", success=False)
+
+    if not pending:
+        return _callback_page("Google Ads sign-in expired", "Anton CoWork could not find a pending sign-in request. Start the connection again from Customize.", success=False)
+
+    pending_state = str(pending.get("state", "")).strip()
+    if not state or state != pending_state:
+        _clear_google_ads_oauth_pending(lastError="State mismatch.", lastErrorAt=_iso_now())
+        return _callback_page("Google Ads connection could not be verified", "The sign-in state did not match.", success=False)
+
+    if not code:
+        _clear_google_ads_oauth_pending(lastError="No authorization code returned.", lastErrorAt=_iso_now())
+        return _callback_page("Google Ads connection could not be completed", "Google did not return an authorization code.", success=False)
+
+    oauth_config = _google_ads_oauth_config()
+    if not oauth_config["ready"]:
+        _clear_google_ads_oauth_pending(lastError=str(oauth_config["error"]), lastErrorAt=_iso_now())
+        return _callback_page("Google Ads connection is not configured", str(oauth_config["error"]), success=False)
+
+    started_at = str(pending.get("startedAt", "")).strip()
+    if started_at:
+        try:
+            if datetime.now(timezone.utc) - datetime.fromisoformat(started_at) > timedelta(minutes=20):
+                _clear_google_ads_oauth_pending(lastError="Sign-in timed out.", lastErrorAt=_iso_now())
+                return _callback_page("Google Ads sign-in expired", "The request took too long. Start the connection again.", success=False)
+        except ValueError:
+            pass
+
+    try:
+        token_data = _json_request(
+            GOOGLE_TOKEN_ENDPOINT,
+            method="POST",
+            data={
+                "code": code,
+                "client_id": str(oauth_config["client_id"]),
+                "client_secret": str(oauth_config["client_secret"]),
+                "redirect_uri": str(pending.get("redirectUri") or _google_ads_redirect_uri()),
+                "grant_type": "authorization_code",
+                "code_verifier": str(pending.get("verifier", "")),
+            },
+        )
+        access_token = str(token_data.get("access_token", "")).strip()
+        if not access_token:
+            raise HTTPException(status_code=502, detail="Token exchange did not return an access token.")
+
+        userinfo = _json_request(GOOGLE_USERINFO_ENDPOINT, headers={"Authorization": f"Bearer {access_token}"})
+        account_email = str(userinfo.get("email", "")).strip()
+        account_name = str(userinfo.get("name", "")).strip()
+        connection_name = account_email or GOOGLE_ADS_ENGINE
+        expires_in = int(token_data.get("expires_in", 0) or 0)
+        expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat() if expires_in else ""
+
+        try:
+            from anton.core.datasources.data_vault import LocalDataVault
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Anton data vault is unavailable") from exc
+
+        LocalDataVault().save(GOOGLE_ADS_ENGINE, connection_name, {
+            "auth_type": "oauth",
+            "access_token": access_token,
+            "refresh_token": str(token_data.get("refresh_token", "")).strip(),
+            "token_type": str(token_data.get("token_type", "Bearer")).strip(),
+            "scope": str(token_data.get("scope", "")).strip(),
+            "expires_at": expires_at,
+            "account_email": account_email,
+            "account_name": account_name,
+        })
+    except HTTPException as exc:
+        _clear_google_ads_oauth_pending(lastError=str(exc.detail), lastErrorAt=_iso_now())
+        return _callback_page("Google Ads connection failed", "An error occurred. Return to Anton CoWork and try again.", success=False)
+    except Exception as exc:
+        _clear_google_ads_oauth_pending(lastError=str(exc), lastErrorAt=_iso_now())
+        return _callback_page("Google Ads connection failed", "Anton CoWork could not finish the sign-in flow.", success=False)
+
+    _clear_google_ads_oauth_pending(lastError="", lastErrorAt="", lastSuccessAt=_iso_now())
+    return _callback_page(
+        "Google Ads connected",
+        f"{account_name or account_email or 'Your Google account'} is now connected. You can close this tab and return to Anton CoWork.",
+        success=True,
+    )
+
+
+# ── Google Analytics 4 OAuth ──────────────────────────────────────────────────
+
+def _google_analytics_oauth_config() -> dict[str, str | bool]:
+    return _make_oauth_config(GOOGLE_ANALYTICS_CLIENT_ID, GOOGLE_ANALYTICS_CLIENT_SECRET)
+
+
+def _google_analytics_redirect_uri() -> str:
+    return f"{_server_origin()}/v1/integrations/google-analytics/oauth/callback"
+
+
+def _google_analytics_oauth_meta() -> dict[str, Any]:
+    state = load_state()
+    utility_state = state.get("utility_state") if isinstance(state, dict) else {}
+    meta = utility_state.get(GOOGLE_ANALYTICS_OAUTH_STATE_KEY) if isinstance(utility_state, dict) else {}
+    if not isinstance(meta, dict):
+        meta = {}
+    if not isinstance(meta.get("pending"), dict):
+        meta["pending"] = {}
+    return meta
+
+
+def _write_google_analytics_oauth_meta(**updates: Any) -> dict[str, Any]:
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        utility_state = state.setdefault("utility_state", {})
+        meta = utility_state.get(GOOGLE_ANALYTICS_OAUTH_STATE_KEY)
+        if not isinstance(meta, dict):
+            meta = {}
+        meta.update(updates)
+        if not isinstance(meta.get("pending"), dict):
+            meta["pending"] = {}
+        utility_state[GOOGLE_ANALYTICS_OAUTH_STATE_KEY] = meta
+        return dict(meta)
+    return update_state(mutate)
+
+
+def _clear_google_analytics_oauth_pending(**updates: Any) -> dict[str, Any]:
+    return _write_google_analytics_oauth_meta(pending={}, **updates)
+
+
+def _google_analytics_oauth_connections(vault) -> list[dict[str, Any]]:
+    connections = []
+    try:
+        items = vault.list_connections()
+    except Exception:
+        logger.warning("Could not list vault connections for Google Analytics", exc_info=True)
+        return connections
+    for item in items:
+        if item.get("engine") != GOOGLE_ANALYTICS_ENGINE or not item.get("name"):
+            continue
+        try:
+            fields = vault.load(GOOGLE_ANALYTICS_ENGINE, item["name"]) or {}
+        except Exception:
+            logger.warning("Skipping unreadable vault entry %s/%s", GOOGLE_ANALYTICS_ENGINE, item["name"])
+            continue
+        if fields.get("auth_type") != "oauth":
+            continue
+        display_name = fields.get("account_name", "").strip() or fields.get("account_email", "").strip() or item["name"]
+        subtitle = fields.get("account_email", "").strip() or item["name"]
+        connections.append({
+            "engine": GOOGLE_ANALYTICS_ENGINE,
+            "name": item["name"],
+            "slug": f"{GOOGLE_ANALYTICS_ENGINE}-{item['name']}",
+            "label": display_name,
+            "subtitle": subtitle,
+            "connectedVia": "browser_oauth",
+            "createdAt": item.get("created_at", ""),
+        })
+    return connections
+
+
+def _google_analytics_integration_item(vault) -> dict[str, Any]:
+    oauth_config = _google_analytics_oauth_config()
+    oauth_meta = _google_analytics_oauth_meta()
+    connections = _google_analytics_oauth_connections(vault)
+    return {
+        "id": GOOGLE_ANALYTICS_ENGINE,
+        "title": "Google Analytics 4",
+        "engine": GOOGLE_ANALYTICS_ENGINE,
+        "status": "connected" if connections else ("available" if oauth_config["ready"] else "needs_config"),
+        "description": "Connect your Google Analytics 4 account so Anton can read analytics data from your GA4 properties.",
+        "setupMode": "browser_oauth",
+        "connections": connections,
+        "connectionCount": len(connections),
+        "engineAvailable": True,
+        "oauth": {
+            "ready": oauth_config["ready"],
+            "configError": oauth_config["error"],
+            "pending": bool(oauth_meta.get("pending")),
+            "lastSuccessAt": oauth_meta.get("lastSuccessAt", ""),
+            "lastError": oauth_meta.get("lastError", ""),
+            "lastErrorAt": oauth_meta.get("lastErrorAt", ""),
+            "launchLabel": "Connect Google Analytics 4",
+            "redirectUri": _google_analytics_redirect_uri(),
+        },
+    }
+
+
+@router.post("/google-analytics/oauth/start")
+async def start_google_analytics_oauth():
+    oauth_config = _google_analytics_oauth_config()
+    if not oauth_config["ready"]:
+        raise HTTPException(status_code=400, detail=str(oauth_config["error"]))
+
+    verifier = _pkce_verifier()
+    challenge = _pkce_challenge(verifier)
+    started_at = _iso_now()
+    state = secrets.token_urlsafe(24)
+    redirect_uri = _google_analytics_redirect_uri()
+
+    _write_google_analytics_oauth_meta(
+        pending={"state": state, "verifier": verifier, "redirectUri": redirect_uri, "startedAt": started_at},
+        lastError="",
+        lastErrorAt="",
+    )
+
+    auth_url = (
+        f"{GOOGLE_AUTH_ENDPOINT}?"
+        + urlencode({
+            "client_id": oauth_config["client_id"],
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "access_type": "offline",
+            "prompt": "consent",
+            "scope": " ".join(GOOGLE_ANALYTICS_OAUTH_SCOPES),
+            "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        })
+    )
+    return {"status": "ok", "authUrl": auth_url, "redirectUri": redirect_uri, "startedAt": started_at}
+
+
+@router.get("/google-analytics/oauth/callback")
+async def google_analytics_oauth_callback(
+    code: str = Query(default=""),
+    state: str = Query(default=""),
+    error: str = Query(default=""),
+):
+    oauth_meta = _google_analytics_oauth_meta()
+    pending = oauth_meta.get("pending") or {}
+    if error:
+        _clear_google_analytics_oauth_pending(lastError=f"Google sign-in returned: {error}", lastErrorAt=_iso_now())
+        return _callback_page("Google Analytics connection was cancelled", "You can return to Anton CoWork and try again.", success=False)
+
+    if not pending:
+        return _callback_page("Google Analytics sign-in expired", "Anton CoWork could not find a pending sign-in request. Start the connection again from Customize.", success=False)
+
+    pending_state = str(pending.get("state", "")).strip()
+    if not state or state != pending_state:
+        _clear_google_analytics_oauth_pending(lastError="State mismatch.", lastErrorAt=_iso_now())
+        return _callback_page("Google Analytics connection could not be verified", "The sign-in state did not match.", success=False)
+
+    if not code:
+        _clear_google_analytics_oauth_pending(lastError="No authorization code returned.", lastErrorAt=_iso_now())
+        return _callback_page("Google Analytics connection could not be completed", "Google did not return an authorization code.", success=False)
+
+    oauth_config = _google_analytics_oauth_config()
+    if not oauth_config["ready"]:
+        _clear_google_analytics_oauth_pending(lastError=str(oauth_config["error"]), lastErrorAt=_iso_now())
+        return _callback_page("Google Analytics connection is not configured", str(oauth_config["error"]), success=False)
+
+    started_at = str(pending.get("startedAt", "")).strip()
+    if started_at:
+        try:
+            if datetime.now(timezone.utc) - datetime.fromisoformat(started_at) > timedelta(minutes=20):
+                _clear_google_analytics_oauth_pending(lastError="Sign-in timed out.", lastErrorAt=_iso_now())
+                return _callback_page("Google Analytics sign-in expired", "The request took too long. Start the connection again.", success=False)
+        except ValueError:
+            pass
+
+    try:
+        token_data = _json_request(
+            GOOGLE_TOKEN_ENDPOINT,
+            method="POST",
+            data={
+                "code": code,
+                "client_id": str(oauth_config["client_id"]),
+                "client_secret": str(oauth_config["client_secret"]),
+                "redirect_uri": str(pending.get("redirectUri") or _google_analytics_redirect_uri()),
+                "grant_type": "authorization_code",
+                "code_verifier": str(pending.get("verifier", "")),
+            },
+        )
+        access_token = str(token_data.get("access_token", "")).strip()
+        if not access_token:
+            raise HTTPException(status_code=502, detail="Token exchange did not return an access token.")
+
+        userinfo = _json_request(GOOGLE_USERINFO_ENDPOINT, headers={"Authorization": f"Bearer {access_token}"})
+        account_email = str(userinfo.get("email", "")).strip()
+        account_name = str(userinfo.get("name", "")).strip()
+        connection_name = account_email or GOOGLE_ANALYTICS_ENGINE
+        expires_in = int(token_data.get("expires_in", 0) or 0)
+        expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat() if expires_in else ""
+
+        try:
+            from anton.core.datasources.data_vault import LocalDataVault
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Anton data vault is unavailable") from exc
+
+        LocalDataVault().save(GOOGLE_ANALYTICS_ENGINE, connection_name, {
+            "auth_type": "oauth",
+            "access_token": access_token,
+            "refresh_token": str(token_data.get("refresh_token", "")).strip(),
+            "token_type": str(token_data.get("token_type", "Bearer")).strip(),
+            "scope": str(token_data.get("scope", "")).strip(),
+            "expires_at": expires_at,
+            "account_email": account_email,
+            "account_name": account_name,
+        })
+    except HTTPException as exc:
+        _clear_google_analytics_oauth_pending(lastError=str(exc.detail), lastErrorAt=_iso_now())
+        return _callback_page("Google Analytics connection failed", "An error occurred. Return to Anton CoWork and try again.", success=False)
+    except Exception as exc:
+        _clear_google_analytics_oauth_pending(lastError=str(exc), lastErrorAt=_iso_now())
+        return _callback_page("Google Analytics connection failed", "Anton CoWork could not finish the sign-in flow.", success=False)
+
+    _clear_google_analytics_oauth_pending(lastError="", lastErrorAt="", lastSuccessAt=_iso_now())
+    return _callback_page(
+        "Google Analytics 4 connected",
+        f"{account_name or account_email or 'Your Google account'} is now connected. You can close this tab and return to Anton CoWork.",
+        success=True,
+    )
+
+
+# ── GCP OAuth ─────────────────────────────────────────────────────────────────
+
+def _gcp_oauth_config() -> dict[str, str | bool]:
+    return _make_oauth_config(GCP_CLIENT_ID, GCP_CLIENT_SECRET)
+
+
+def _gcp_redirect_uri() -> str:
+    return f"{_server_origin()}/v1/integrations/gcp/oauth/callback"
+
+
+def _gcp_oauth_meta() -> dict[str, Any]:
+    state = load_state()
+    utility_state = state.get("utility_state") if isinstance(state, dict) else {}
+    meta = utility_state.get(GCP_OAUTH_STATE_KEY) if isinstance(utility_state, dict) else {}
+    if not isinstance(meta, dict):
+        meta = {}
+    if not isinstance(meta.get("pending"), dict):
+        meta["pending"] = {}
+    return meta
+
+
+def _write_gcp_oauth_meta(**updates: Any) -> dict[str, Any]:
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        utility_state = state.setdefault("utility_state", {})
+        meta = utility_state.get(GCP_OAUTH_STATE_KEY)
+        if not isinstance(meta, dict):
+            meta = {}
+        meta.update(updates)
+        if not isinstance(meta.get("pending"), dict):
+            meta["pending"] = {}
+        utility_state[GCP_OAUTH_STATE_KEY] = meta
+        return dict(meta)
+    return update_state(mutate)
+
+
+def _clear_gcp_oauth_pending(**updates: Any) -> dict[str, Any]:
+    return _write_gcp_oauth_meta(pending={}, **updates)
+
+
+def _gcp_oauth_connections(vault) -> list[dict[str, Any]]:
+    connections = []
+    try:
+        items = vault.list_connections()
+    except Exception:
+        logger.warning("Could not list vault connections for GCP", exc_info=True)
+        return connections
+    for item in items:
+        if item.get("engine") != GCP_ENGINE or not item.get("name"):
+            continue
+        try:
+            fields = vault.load(GCP_ENGINE, item["name"]) or {}
+        except Exception:
+            logger.warning("Skipping unreadable vault entry %s/%s", GCP_ENGINE, item["name"])
+            continue
+        if fields.get("auth_type") != "oauth":
+            continue
+        display_name = fields.get("account_name", "").strip() or fields.get("account_email", "").strip() or item["name"]
+        subtitle = fields.get("account_email", "").strip() or item["name"]
+        connections.append({
+            "engine": GCP_ENGINE,
+            "name": item["name"],
+            "slug": f"{GCP_ENGINE}-{item['name']}",
+            "label": display_name,
+            "subtitle": subtitle,
+            "connectedVia": "browser_oauth",
+            "createdAt": item.get("created_at", ""),
+        })
+    return connections
+
+
+def _gcp_integration_item(vault) -> dict[str, Any]:
+    oauth_config = _gcp_oauth_config()
+    oauth_meta = _gcp_oauth_meta()
+    connections = _gcp_oauth_connections(vault)
+    return {
+        "id": GCP_ENGINE,
+        "title": "Google Cloud",
+        "engine": GCP_ENGINE,
+        "status": "connected" if connections else ("available" if oauth_config["ready"] else "needs_config"),
+        "description": "Connect your Google Cloud account so Anton can interact with GCP services.",
+        "setupMode": "browser_oauth",
+        "connections": connections,
+        "connectionCount": len(connections),
+        "engineAvailable": True,
+        "oauth": {
+            "ready": oauth_config["ready"],
+            "configError": oauth_config["error"],
+            "pending": bool(oauth_meta.get("pending")),
+            "lastSuccessAt": oauth_meta.get("lastSuccessAt", ""),
+            "lastError": oauth_meta.get("lastError", ""),
+            "lastErrorAt": oauth_meta.get("lastErrorAt", ""),
+            "launchLabel": "Connect Google Cloud",
+            "redirectUri": _gcp_redirect_uri(),
+        },
+    }
+
+
+@router.post("/gcp/oauth/start")
+async def start_gcp_oauth():
+    oauth_config = _gcp_oauth_config()
+    if not oauth_config["ready"]:
+        raise HTTPException(status_code=400, detail=str(oauth_config["error"]))
+
+    verifier = _pkce_verifier()
+    challenge = _pkce_challenge(verifier)
+    started_at = _iso_now()
+    state = secrets.token_urlsafe(24)
+    redirect_uri = _gcp_redirect_uri()
+
+    _write_gcp_oauth_meta(
+        pending={"state": state, "verifier": verifier, "redirectUri": redirect_uri, "startedAt": started_at},
+        lastError="",
+        lastErrorAt="",
+    )
+
+    auth_url = (
+        f"{GOOGLE_AUTH_ENDPOINT}?"
+        + urlencode({
+            "client_id": oauth_config["client_id"],
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "access_type": "offline",
+            "prompt": "consent",
+            "scope": " ".join(GCP_OAUTH_SCOPES),
+            "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        })
+    )
+    return {"status": "ok", "authUrl": auth_url, "redirectUri": redirect_uri, "startedAt": started_at}
+
+
+@router.get("/gcp/oauth/callback")
+async def gcp_oauth_callback(
+    code: str = Query(default=""),
+    state: str = Query(default=""),
+    error: str = Query(default=""),
+):
+    oauth_meta = _gcp_oauth_meta()
+    pending = oauth_meta.get("pending") or {}
+    if error:
+        _clear_gcp_oauth_pending(lastError=f"Google sign-in returned: {error}", lastErrorAt=_iso_now())
+        return _callback_page("Google Cloud connection was cancelled", "You can return to Anton CoWork and try again.", success=False)
+
+    if not pending:
+        return _callback_page("Google Cloud sign-in expired", "Anton CoWork could not find a pending sign-in request. Start the connection again from Customize.", success=False)
+
+    pending_state = str(pending.get("state", "")).strip()
+    if not state or state != pending_state:
+        _clear_gcp_oauth_pending(lastError="State mismatch.", lastErrorAt=_iso_now())
+        return _callback_page("Google Cloud connection could not be verified", "The sign-in state did not match.", success=False)
+
+    if not code:
+        _clear_gcp_oauth_pending(lastError="No authorization code returned.", lastErrorAt=_iso_now())
+        return _callback_page("Google Cloud connection could not be completed", "Google did not return an authorization code.", success=False)
+
+    oauth_config = _gcp_oauth_config()
+    if not oauth_config["ready"]:
+        _clear_gcp_oauth_pending(lastError=str(oauth_config["error"]), lastErrorAt=_iso_now())
+        return _callback_page("Google Cloud connection is not configured", str(oauth_config["error"]), success=False)
+
+    started_at = str(pending.get("startedAt", "")).strip()
+    if started_at:
+        try:
+            if datetime.now(timezone.utc) - datetime.fromisoformat(started_at) > timedelta(minutes=20):
+                _clear_gcp_oauth_pending(lastError="Sign-in timed out.", lastErrorAt=_iso_now())
+                return _callback_page("Google Cloud sign-in expired", "The request took too long. Start the connection again.", success=False)
+        except ValueError:
+            pass
+
+    try:
+        token_data = _json_request(
+            GOOGLE_TOKEN_ENDPOINT,
+            method="POST",
+            data={
+                "code": code,
+                "client_id": str(oauth_config["client_id"]),
+                "client_secret": str(oauth_config["client_secret"]),
+                "redirect_uri": str(pending.get("redirectUri") or _gcp_redirect_uri()),
+                "grant_type": "authorization_code",
+                "code_verifier": str(pending.get("verifier", "")),
+            },
+        )
+        access_token = str(token_data.get("access_token", "")).strip()
+        if not access_token:
+            raise HTTPException(status_code=502, detail="Token exchange did not return an access token.")
+
+        userinfo = _json_request(GOOGLE_USERINFO_ENDPOINT, headers={"Authorization": f"Bearer {access_token}"})
+        account_email = str(userinfo.get("email", "")).strip()
+        account_name = str(userinfo.get("name", "")).strip()
+        connection_name = account_email or GCP_ENGINE
+        expires_in = int(token_data.get("expires_in", 0) or 0)
+        expires_at = (datetime.now(timezone.utc) + timedelta(seconds=expires_in)).isoformat() if expires_in else ""
+
+        try:
+            from anton.core.datasources.data_vault import LocalDataVault
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Anton data vault is unavailable") from exc
+
+        LocalDataVault().save(GCP_ENGINE, connection_name, {
+            "auth_type": "oauth",
+            "access_token": access_token,
+            "refresh_token": str(token_data.get("refresh_token", "")).strip(),
+            "token_type": str(token_data.get("token_type", "Bearer")).strip(),
+            "scope": str(token_data.get("scope", "")).strip(),
+            "expires_at": expires_at,
+            "account_email": account_email,
+            "account_name": account_name,
+        })
+    except HTTPException as exc:
+        _clear_gcp_oauth_pending(lastError=str(exc.detail), lastErrorAt=_iso_now())
+        return _callback_page("Google Cloud connection failed", "An error occurred. Return to Anton CoWork and try again.", success=False)
+    except Exception as exc:
+        _clear_gcp_oauth_pending(lastError=str(exc), lastErrorAt=_iso_now())
+        return _callback_page("Google Cloud connection failed", "Anton CoWork could not finish the sign-in flow.", success=False)
+
+    _clear_gcp_oauth_pending(lastError="", lastErrorAt="", lastSuccessAt=_iso_now())
+    return _callback_page(
+        "Google Cloud connected",
         f"{account_name or account_email or 'Your Google account'} is now connected. You can close this tab and return to Anton CoWork.",
         success=True,
     )
