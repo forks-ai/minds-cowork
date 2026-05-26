@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import httpx
 import urllib.error
 import urllib.request
@@ -103,6 +104,71 @@ OPENAI_BASE_URL = "https://api.openai.com/v1"
 MINDS_API_PATH_SUFFIX = "/v1"
 
 OPENAI_FAMILY = ("openai", "gemini", "openai-compatible", "minds-cloud")
+
+
+# The agent exposes an OpenAI-compatible `/v1/models` route. We surface
+# that list in the Settings model picker so cowork tracks whatever the
+# router currently supports instead of a hand-maintained constant
+# (RECOMMENDED_MODELS["minds-cloud"] is now only the offline fallback).
+#
+# Cached so a rapid sequence of Settings opens doesn't re-hit the
+# network. Failures are cached too — with a shorter TTL — so a route
+# that isn't deployed yet (prod 404s today; only the alpha host serves
+# it) doesn't add a round-trip to every settings load.
+_MINDS_MODELS_TTL = 300.0       # successful fetch
+_MINDS_MODELS_FAIL_TTL = 30.0   # negative result (down / not deployed)
+_minds_models_cache: dict[str, tuple[float, Optional[list[str]]]] = {}
+
+
+async def _fetch_minds_models(base_url: str, api_key: str) -> Optional[list[str]]:
+    """Fetch supported model ids from the agent's OpenAI-compatible
+    `/v1/models` endpoint. `base_url` already carries the `/v1` suffix
+    (see `_base_url_for`). Returns the model-id list, or None on any
+    failure so the caller falls back to the static list."""
+    base = (base_url or "").rstrip("/")
+    if not base or not api_key:
+        return None
+
+    now = time.monotonic()
+    cached = _minds_models_cache.get(base)
+    if cached:
+        ts, val = cached
+        ttl = _MINDS_MODELS_TTL if val else _MINDS_MODELS_FAIL_TTL
+        if (now - ts) < ttl:
+            return val
+
+    def _remember(val: Optional[list[str]]) -> Optional[list[str]]:
+        _minds_models_cache[base] = (time.monotonic(), val)
+        return val
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(6.0), follow_redirects=True
+        ) as client:
+            r = await client.get(
+                f"{base}/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+        if r.status_code >= 400:
+            logger.debug("minds /models fetch returned HTTP %s", r.status_code)
+            return _remember(None)
+        data = r.json()
+    except Exception as exc:
+        logger.debug("minds /models fetch failed: %s", exc)
+        return _remember(None)
+
+    # OpenAI shape: {"object": "list", "data": [{"id": "...", ...}]}.
+    # Accept a bare list too, defensively.
+    rows = data.get("data") if isinstance(data, dict) else data
+    if not isinstance(rows, list):
+        return _remember(None)
+    ids = [
+        str(row.get("id")).strip()
+        for row in rows
+        if isinstance(row, dict) and row.get("id")
+    ]
+    ids = [i for i in ids if i]
+    return _remember(ids or None)
 
 
 def _read_dotenv(path: Path) -> dict[str, str]:
@@ -691,6 +757,18 @@ async def get_settings():
     ui = _ui_settings()
     providers = _load_providers()
     model_cfg = _load_model_config()
+
+    # Overlay the agent's live `/v1/models` list onto the minds-cloud
+    # bucket. Falls back to the static list when the key/url are absent
+    # or the endpoint can't be reached.
+    recommended_models = {k: list(v) for k, v in RECOMMENDED_MODELS.items()}
+    minds_key = _get_env("ANTON_MINDS_API_KEY", "")
+    minds_url = (_get_env("ANTON_MINDS_URL", "https://api.mindshub.ai") or "").rstrip("/")
+    if minds_key and minds_url:
+        live = await _fetch_minds_models(f"{minds_url}{MINDS_API_PATH_SUFFIX}", minds_key)
+        if live:
+            recommended_models["minds-cloud"] = live
+
     return {
         "planningProvider": _get_env("ANTON_PLANNING_PROVIDER", "anthropic"),
         "planningModel":    _get_env("ANTON_PLANNING_MODEL", "claude-sonnet-4-6"),
@@ -727,7 +805,7 @@ async def get_settings():
         "modelOverrides": model_cfg["modelOverrides"],
         "providerTypes":  list(PROVIDER_TYPES),
         "providerTypeLabels": PROVIDER_TYPE_LABELS,
-        "recommendedModels": RECOMMENDED_MODELS,
+        "recommendedModels": recommended_models,
         "recommendedPair":   {k: list(v) for k, v in RECOMMENDED_PAIR.items()},
         "providerStatus": (load_state().get("preferences", {}) or {}).get("providerStatus") or {},
     }
