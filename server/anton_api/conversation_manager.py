@@ -1021,17 +1021,20 @@ async def _build_chat_session(
     settings = AntonSettings()
     settings.resolve_workspace(str(base))
     if model:
-        # Minds Cloud sentinels (`_reason_`, `_code_`) only resolve at
-        # the openai-compatible router. If the active provider is
-        # something else (e.g. anthropic, after the user switched off
-        # Minds), an old cowork preference can keep sending these on
-        # every request. Drop the override and stay with the env's
-        # `ANTON_PLANNING_MODEL` instead of forwarding `_reason_` to
-        # api.anthropic.com (which 404s).
-        is_minds_sentinel = model.startswith("_") and model.endswith("_")
-        if is_minds_sentinel and settings.planning_provider != "openai-compatible":
+        # Minds-Cloud-only model names — both legacy sentinels (`_reason_`,
+        # `_code_`) and the current `latest:*` alias namespace — only
+        # resolve at the openai-compatible router. If the user switched
+        # off Minds Cloud after picking one of these, an old saved cowork
+        # preference can keep sending it on every request. Drop the
+        # override and stay with the env's `ANTON_PLANNING_MODEL` instead
+        # of forwarding a Minds-only name to api.anthropic.com (which 404s).
+        is_minds_only_model = (
+            (model.startswith("_") and model.endswith("_"))
+            or model.startswith("latest:")
+        )
+        if is_minds_only_model and settings.planning_provider != "openai-compatible":
             logging.getLogger(__name__).warning(
-                "Ignoring Minds sentinel model %r — active planning_provider is %r. "
+                "Ignoring Minds-Cloud-only model %r — active planning_provider is %r. "
                 "Falling back to env ANTON_PLANNING_MODEL=%r.",
                 model, settings.planning_provider, settings.planning_model,
             )
@@ -1170,6 +1173,10 @@ async def _build_chat_session(
         initial_history=initial_history,
         history_store=history_store,
         session_id=conversation_id,
+        # Tag every LLM trace emitted by anton-core (langfuse) with the
+        # cowork harness identity so child tool-call spans are filterable
+        # in the langfuse UI by source.
+        harness="cowork",
         proactive_dashboards=settings.proactive_dashboards,
         tools=[
             CONNECT_DATASOURCE_TOOL,
@@ -1520,7 +1527,9 @@ async def _produce_turn(
     nonlocal_session: dict[str, Any] = {"s": session}
 
     async def _drain(prompt: str) -> None:
-        async for event in nonlocal_session["s"].turn_stream(prompt):
+        # `turn_id` is forwarded so anton-core can stamp the LLM trace +
+        # child spans with the per-turn identifier for langfuse.
+        async for event in nonlocal_session["s"].turn_stream(prompt, turn_id=turn_index):
             _write_event(event)
 
     try:
