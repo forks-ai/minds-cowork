@@ -220,7 +220,7 @@ export default function Sidebar({
   // in a separate /pins store), so without this the menu shows
   // "Pin" on items that are already pinned.
   const pinnedIds = new Set(
-    (pins || []).filter((p) => p.type === 'task').map((p) => p.id)
+    (pins || []).filter((p) => p.item_type === 'conversation').map((p) => p.item_id)
   );
   const tasksWithPin = tasks.map((t) =>
     pinnedIds.has(t.id) ? { ...t, pinned: true } : t
@@ -352,12 +352,12 @@ export default function Sidebar({
 
   const [recentsModalOpen, setRecentsModalOpen] = useState(false);
   const pinnedTasks = (pins || [])
-    .filter((pin) => pin.type === 'task')
+    .filter((pin) => pin.item_type === 'conversation')
     .map((pin) => {
-      const found = tasksWithPin.find((task) => task.id === pin.id);
+      const found = tasksWithPin.find((task) => task.id === pin.item_id);
       return found
         ? { ...found, pinned: true }
-        : { id: pin.id, title: pin.title || pin.id, status: 'idle', pinned: true };
+        : { id: pin.item_id, title: pin.title || pin.item_id, status: 'idle', pinned: true };
     })
     .slice(0, 8);
 

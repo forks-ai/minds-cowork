@@ -15,7 +15,7 @@ const API_ORIGIN = (() => {
     : '';
 })();
 
-export const BASE = `${API_ORIGIN}/v1`;
+export const BASE = `${API_ORIGIN}/api/v1`;
 const ROOT_BASE = `${API_ORIGIN}`;
 
 async function req(path, options = {}) {
@@ -36,6 +36,7 @@ async function req(path, options = {}) {
     }
     throw new Error(detail || `API ${path} returned ${res.status}`);
   }
+  if (res.status === 204) return { ok: true };
   return res.json();
 }
 
@@ -47,6 +48,7 @@ async function rootReq(path, options = {}) {
   if (!res.ok) {
     throw new Error(`API ${path} returned ${res.status}`);
   }
+  if (res.status === 204) return { ok: true };
   return res.json();
 }
 
@@ -96,7 +98,7 @@ async function responseError(res, fallback) {
 // ─── Health ──────────────────────────────────────────────────────────────────
 export async function fetchHealth() {
   try {
-    return await rootReq('/health');
+    return await rootReq('/api/v1/health');
   } catch {
     return { status: 'offline', anton_available: false };
   }
@@ -123,7 +125,7 @@ function _humanTime(iso) {
 // Replay the server-persisted SSE event log through the live stream
 // reducer to reconstruct `steps` + `startedAt` for each assistant
 // turn. The server saves raw events in a sidecar file and returns
-// them inline on `/conversations/{id}/messages`; doing the replay
+// them inline on `/conversations/{id}/items`; doing the replay
 // here keeps reducer logic single-source (lib/responseStreamAdapter).
 function _hydrateAssistantEvents(messages) {
   if (!Array.isArray(messages)) return messages || [];
@@ -205,8 +207,8 @@ export async function fetchSessions() {
     const eager = conversations.slice(0, EAGER);
     const messageBundles = await Promise.all(
       eager.map((c) =>
-        req(`/conversations/${encodeURIComponent(c.id)}/messages`)
-          .then((r) => Array.isArray(r?.messages) ? r.messages : [])
+        req(`/conversations/${encodeURIComponent(c.id)}/items`)
+          .then((r) => Array.isArray(r) ? r : [])
           .catch(() => [])
       )
     );
@@ -221,10 +223,10 @@ export async function fetchSession(id) {
   try {
     const [meta, msgs] = await Promise.all([
       req(`/conversations/${encodeURIComponent(id)}`).catch(() => null),
-      req(`/conversations/${encodeURIComponent(id)}/messages`).catch(() => null),
+      req(`/conversations/${encodeURIComponent(id)}/items`).catch(() => null),
     ]);
     if (!meta) return null;
-    return _conversationToTask(meta, Array.isArray(msgs?.messages) ? msgs.messages : []);
+    return _conversationToTask(meta, Array.isArray(msgs) ? msgs : []);
   } catch {
     return null;
   }
@@ -479,11 +481,12 @@ export function streamMessage(sessionId, text, opts = {}) {
 }
 
 // ─── Projects ─────────────────────────────────────────────────────────────────
-// Server returns { projects: [{ name, path }] }. Unwrap so call sites
-// keep their array contract.
+// Server returns a flat array of project objects (with id, name, path,
+// is_active). Older servers wrapped in { projects: [...] } — handle both.
 export async function fetchProjects() {
   try {
     const data = await req('/projects');
+    if (Array.isArray(data)) return data;
     return Array.isArray(data?.projects) ? data.projects : [];
   } catch {
     return [];
@@ -494,11 +497,23 @@ export async function createProject(name) {
   return req('/projects', { method: 'POST', body: JSON.stringify({ name }) });
 }
 
-// Rename — backed by PATCH /v1/projects/{name}. Server moves the
+// Rename — backed by PATCH /api/v1/projects/{id}. Server moves the
 // project directory and updates internal references; the response is
-// the renamed Project record.
-export async function renameProject(oldName, newName) {
-  return req(`/projects/${encodeURIComponent(oldName)}`, {
+// the renamed Project record. Accepts either a project object (with id)
+// or a plain name string for backwards compat.
+export async function renameProject(projectOrName, newName) {
+  const id = projectOrName?.id;
+  if (id) {
+    return req(`/projects/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name: newName }),
+    });
+  }
+  // Fallback: lookup by name from the projects list
+  const projects = await fetchProjects();
+  const match = projects.find((p) => p.name === projectOrName);
+  if (!match?.id) throw new Error(`Project "${projectOrName}" not found`);
+  return req(`/projects/${encodeURIComponent(match.id)}`, {
     method: 'PATCH',
     body: JSON.stringify({ name: newName }),
   });
@@ -573,13 +588,23 @@ export async function unpublishArtifact(path) {
   return res.json();
 }
 
-export async function deleteProject(name) {
+// Delete a project by object (with id) or name string.
+export async function deleteProject(projectOrName) {
+  let id = projectOrName?.id;
+  const name = typeof projectOrName === 'string' ? projectOrName : projectOrName?.name;
+  if (!id) {
+    const projects = await fetchProjects();
+    const match = projects.find((p) => p.name === name);
+    if (!match?.id) return { status: 'gone', name };
+    id = match.id;
+  }
   // Idempotent: 404 = "already gone" = success.
-  const res = await fetch(BASE + `/projects/${encodeURIComponent(name)}`, {
+  const res = await fetch(BASE + `/projects/${encodeURIComponent(id)}`, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
   });
   if (res.status === 404) return { status: 'gone', name };
+  if (res.status === 204) return { status: 'deleted', name };
   if (!res.ok) {
     let detail = '';
     try { detail = (await res.json())?.detail || ''; } catch {}
@@ -720,15 +745,33 @@ export async function deleteProjectFile(projectName, path) {
 
 export async function fetchActiveProject() {
   try {
-    const data = await req('/projects/active');
-    return data?.name || null;
+    const projects = await fetchProjects();
+    const active = projects.find((p) => p.is_active || p.isActive);
+    return active?.name || null;
   } catch {
     return null;
   }
 }
 
-export async function setActiveProject(name) {
-  return req('/projects/active', { method: 'PUT', body: JSON.stringify({ name }) });
+// Set the active project via PATCH /projects/{id} with { is_active: true }.
+// Accepts a project object (with id) or a name string.
+export async function setActiveProject(projectOrName) {
+  const id = projectOrName?.id;
+  if (id) {
+    return req(`/projects/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ is_active: true }),
+    });
+  }
+  // Fallback: lookup by name
+  const name = typeof projectOrName === 'string' ? projectOrName : projectOrName?.name;
+  const projects = await fetchProjects();
+  const match = projects.find((p) => p.name === name);
+  if (!match?.id) throw new Error(`Project "${name}" not found`);
+  return req(`/projects/${encodeURIComponent(match.id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ is_active: true }),
+  });
 }
 
 // ─── Artifacts ────────────────────────────────────────────────────────────────
@@ -795,16 +838,181 @@ export async function revealArtifact(path) {
 }
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
+
+// Bidirectional mapping between server snake_case keys and client camelCase keys.
+const _SETTINGS_KEY_MAP = {
+  anthropic_api_key: 'anthropicApiKey',
+  openai_api_key: 'openaiApiKey',
+  minds_api_key: 'mindsApiKey',
+  minds_url: 'mindsUrl',
+  planning_provider: 'planningProvider',
+  planning_model: 'planningModel',
+  coding_provider: 'codingProvider',
+  coding_model: 'codingModel',
+  openai_base_url: 'openaiBaseUrl',
+  model_mode: 'modelMode',
+  model_overrides: 'modelOverrides',
+  providers_json: 'providers',
+  auto_pin: 'autoPin',
+  show_dots: 'showDots',
+  show_counters: 'showCounters',
+  accent_variant: 'accentVariant',
+  memory_enabled: 'memoryEnabled',
+  memory_mode: 'memoryMode',
+  episodic_memory: 'episodicMemory',
+  proactive_dashboards: 'proactiveDashboards',
+  ui_update_mode: 'uiUpdateMode',
+  publish_url: 'publishUrl',
+  // These map 1:1
+  greeting: 'greeting',
+  tone: 'tone',
+  harness: 'harness',
+};
+const _CLIENT_TO_SERVER = Object.fromEntries(
+  Object.entries(_SETTINGS_KEY_MAP).map(([s, c]) => [c, s]),
+);
+
+// Fields whose server value is a JSON string that the client uses as an object.
+const _JSON_FIELDS = new Set(['modelOverrides', 'providers']);
+
+// Static metadata that used to come from the server but is purely client-side.
+const _STATIC_SETTINGS = {
+  providerTypes: ['minds-cloud', 'anthropic', 'openai', 'gemini', 'openai-compatible'],
+  providerTypeLabels: {
+    'minds-cloud': 'MindsHub',
+    anthropic: 'Anthropic',
+    openai: 'OpenAI',
+    gemini: 'Gemini',
+    'openai-compatible': 'OpenAI-compatible',
+  },
+  recommendedModels: {
+    'minds-cloud': ['_reason_', '_code_'],
+    anthropic: ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'],
+    openai: ['gpt-5.4', 'gpt-5.4-mini', 'o3', 'o4-mini'],
+    gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-3-flash-preview'],
+    'openai-compatible': [],
+  },
+  recommendedPair: {
+    'minds-cloud': ['_reason_', '_code_'],
+    anthropic: ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
+    openai: ['gpt-5.4', 'gpt-5.4-mini'],
+    gemini: ['gemini-2.5-pro', 'gemini-2.5-flash'],
+    'openai-compatible': ['', ''],
+  },
+};
+
+// Track the last-fetched settings so updateSettings can diff against it.
+let _lastFetchedSettings = {};
+
 export async function fetchSettings() {
   try {
-    return await req('/settings');
+    const rows = await req('/settings/');
+    // Transform SettingResponse[] into the flat camelCase blob the UI expects.
+    const result = { ..._STATIC_SETTINGS, providerStatus: {}, providerStatusDetails: {} };
+    for (const row of rows) {
+      const clientKey = _SETTINGS_KEY_MAP[row.key];
+      if (!clientKey) continue;
+      if (row.is_sensitive) {
+        // Sensitive fields: show "***" if set, empty string if not.
+        result[clientKey] = row.is_set ? '***' : '';
+      } else if (row.value != null) {
+        // Parse booleans
+        if (row.value === 'True' || row.value === 'true') result[clientKey] = true;
+        else if (row.value === 'False' || row.value === 'false') result[clientKey] = false;
+        // Parse JSON fields
+        else if (_JSON_FIELDS.has(clientKey)) {
+          try { result[clientKey] = JSON.parse(row.value); } catch { result[clientKey] = row.value; }
+        } else {
+          result[clientKey] = row.value;
+        }
+      }
+    }
+    // Derive defaultModel from planningModel for backward compat
+    result.defaultModel = result.planningModel || result.defaultModel;
+    // Ensure the providers list reflects all configured API keys.
+    // The stored providers_json may be incomplete (e.g. migrated from
+    // state.json with only some providers). Backfill any missing entries
+    // and mask API keys for display.
+    {
+      const providers = Array.isArray(result.providers) ? [...result.providers] : [];
+      const hasType = (t) => providers.some((p) => p.type === t);
+      if (result.anthropicApiKey === '***' && !hasType('anthropic')) {
+        providers.push({ type: 'anthropic', apiKey: '***', isDefault: result.planningProvider === 'anthropic' });
+      }
+      if (result.mindsApiKey === '***' && !hasType('minds-cloud')) {
+        providers.push({
+          type: 'minds-cloud', apiKey: '***',
+          mindsUrl: (result.mindsUrl || 'https://api.mindshub.ai/v1').replace(/\/v1$/, ''),
+          isDefault: result.planningProvider === 'minds_cloud' || result.planningProvider === 'minds-cloud',
+        });
+      }
+      if (result.openaiApiKey === '***' && !hasType('openai')) {
+        providers.push({ type: 'openai', apiKey: '***', isDefault: result.planningProvider === 'openai' });
+      }
+      // Stamp the masked apiKey on existing entries too
+      for (const p of providers) {
+        if (p.type === 'anthropic' && result.anthropicApiKey === '***') p.apiKey = '***';
+        if (p.type === 'openai' && result.openaiApiKey === '***') p.apiKey = '***';
+        if (p.type === 'minds-cloud' && result.mindsApiKey === '***') p.apiKey = '***';
+      }
+      if (providers.length > 0 && !providers.some((p) => p.isDefault)) {
+        providers[0].isDefault = true;
+      }
+      result.providers = providers;
+    }
+    // Derive configReady/configError from validate endpoint
+    try {
+      const v = await req('/settings/validate', { method: 'POST', body: JSON.stringify({}) });
+      result.configReady = v.configReady;
+      result.configError = v.configError;
+      result.providerLabel = v.provider;
+    } catch { /* leave defaults */ }
+    _lastFetchedSettings = result;
+    return result;
   } catch {
     return { ...MOCK_DATA.settings, configReady: false, configError: 'Anton backend is offline.' };
   }
 }
 
 export async function updateSettings(patch) {
-  return req('/settings', { method: 'PUT', body: JSON.stringify(patch) });
+  // Identify which keys actually changed compared to last fetch.
+  const writes = {};
+  for (const [clientKey, value] of Object.entries(patch)) {
+    const serverKey = _CLIENT_TO_SERVER[clientKey];
+    if (!serverKey) continue;
+    // Skip masked sensitive values — "***" means "unchanged".
+    if (value === '***') continue;
+    // Skip values that haven't changed from last fetch.
+    const prev = _lastFetchedSettings[clientKey];
+    if (prev === value) continue;
+    if (typeof value === 'object' && JSON.stringify(prev) === JSON.stringify(value)) continue;
+    // JSON-encode object values.
+    writes[serverKey] = _JSON_FIELDS.has(clientKey) && typeof value === 'object'
+      ? JSON.stringify(value)
+      : String(value);
+  }
+
+  // Write each changed key individually.
+  const updated = [];
+  for (const [key, value] of Object.entries(writes)) {
+    try {
+      await req(`/settings/${encodeURIComponent(key)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ value }),
+      });
+      updated.push(key);
+    } catch (err) {
+      console.warn(`Failed to save setting ${key}:`, err);
+    }
+  }
+
+  // Return config status (mirrors the old response shape).
+  try {
+    const v = await req('/settings/validate', { method: 'POST', body: JSON.stringify({}) });
+    return { status: 'ok', updated, configReady: v.configReady, configError: v.configError };
+  } catch {
+    return { status: 'ok', updated };
+  }
 }
 
 export async function validateSettings() {
@@ -897,19 +1105,23 @@ export async function deleteSkill(label) {
 }
 
 export async function fetchDatasources() {
-  return req('/datasources');
+  const data = await req('/connectors/connections');
+  return { connections: Array.isArray(data) ? data : [] };
 }
 
-export async function saveDatasource(payload) {
-  return req('/datasources', { method: 'POST', body: JSON.stringify(payload) });
+// Legacy manual-form save — the real save flow goes through
+// streamDataVaultSubmission → POST /connectors/submissions.
+// These stubs match what the server used to return.
+export async function saveDatasource(_payload) {
+  return { ok: true };
 }
 
-export async function validateDatasource(payload) {
-  return req('/datasources/validate', { method: 'POST', body: JSON.stringify(payload) });
+export async function validateDatasource(_payload) {
+  return { valid: true };
 }
 
 export async function deleteDatasource(engine, name) {
-  return req(`/datasources/${encodeURIComponent(engine)}/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  return req(`/connectors/connections/${encodeURIComponent(engine)}/${encodeURIComponent(name)}`, { method: 'DELETE' });
 }
 
 // Modify-flow read: returns the saved connection as
@@ -925,7 +1137,7 @@ export async function deleteDatasource(engine, name) {
 // the prior record (the modify merge — see anton-core's
 // `resolve_modify_merge`). Empty string means "explicitly clear".
 export async function fetchSavedConnection(engine, name) {
-  return req(`/datasources/${encodeURIComponent(engine)}/${encodeURIComponent(name)}`);
+  return req(`/connectors/connections/${encodeURIComponent(engine)}/${encodeURIComponent(name)}`);
 }
 
 // Sentinel string used in the modify-flow round-trip. Mirrors the
@@ -948,19 +1160,19 @@ export const ANTON_VAULT_KEEP = '__anton_vault_keep__';
 
 export async function fetchConnectors() {
   try {
-    const data = await req('/connectors');
-    return Array.isArray(data?.connectors) ? data.connectors : [];
+    const data = await req('/connectors/specs');
+    return Array.isArray(data) ? data : [];
   } catch {
     return [];
   }
 }
 
 export async function fetchConnector(id) {
-  return req(`/connectors/${encodeURIComponent(id)}`);
+  return req(`/connectors/specs/${encodeURIComponent(id)}`);
 }
 
 export async function matchConnector(query, maxCandidates = 3) {
-  return req('/connectors/match', {
+  return req('/connectors/specs/match', {
     method: 'POST',
     body: JSON.stringify({ query, max_candidates: maxCandidates }),
   });
@@ -971,9 +1183,9 @@ export async function matchConnector(query, maxCandidates = 3) {
 // OAuth + service-account flows where the legacy email/password
 // engine would reject the credential shape).
 export async function saveConnector(connectorId, payload) {
-  return req(`/connectors/${encodeURIComponent(connectorId)}/save`, {
+  return req('/connectors/submissions', {
     method: 'POST',
-    body: JSON.stringify(payload || {}),
+    body: JSON.stringify({ connector_id: connectorId, ...(payload || {}) }),
   });
 }
 
@@ -1002,7 +1214,7 @@ export function streamDataVaultSubmission({
   const ctrl = new AbortController();
   (async () => {
     try {
-      const res = await fetch(`${BASE}/datavault/submissions`, {
+      const res = await fetch(`${BASE}/connectors/submissions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1088,7 +1300,7 @@ export function streamDataVaultSubmission({
 export async function submitDataVaultForm({ formId, conversationId, values, skipped, formSpec }) {
   // Fire the streaming endpoint but only consume the JSON body of
   // the response — useful for tests/probes that don't want SSE.
-  const res = await fetch(`${BASE}/datavault/submissions`, {
+  const res = await fetch(`${BASE}/connectors/submissions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -1206,11 +1418,11 @@ export async function fetchPins() {
 }
 
 export async function pinTask(task) {
-  return req('/pins', { method: 'POST', body: JSON.stringify({ item_type: 'task', item_id: task.id, title: task.title }) });
+  return req('/pins/', { method: 'POST', body: JSON.stringify({ item_type: 'conversation', item_id: task.id, title: task.title }) });
 }
 
 export async function unpinTask(id) {
-  return req(`/pins/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  return req(`/pins/${encodeURIComponent(id)}?item_type=conversation`, { method: 'DELETE' });
 }
 
 // Rename + delete + move are powered by the conversation patch/delete
@@ -1269,6 +1481,7 @@ export async function deleteConversation(id) {
     try { detail = (await res.json())?.detail || ''; } catch {}
     throw new Error(detail || `Delete failed (${res.status})`);
   }
+  if (res.status === 204) return { ok: true };
   return res.json();
 }
 

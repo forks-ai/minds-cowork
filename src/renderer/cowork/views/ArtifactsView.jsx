@@ -1152,7 +1152,11 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
     if (!artifact?.path || busyPaths.has(artifact.path)) return;
     setBusy(artifact.path, true);
     try {
-      const result = await host.trashItem(artifact.path);
+      // Trash the entire artifact folder (not just the primary file) so
+      // metadata.json is also removed and the artifact disappears from
+      // the server listing on next fetch.
+      const trashTarget = artifact.folder || artifact.path;
+      const result = await host.trashItem(trashTarget);
       if (result && result.ok === false) {
         throw new Error(result.reason || 'Could not move to Trash.');
       }

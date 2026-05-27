@@ -46,8 +46,7 @@ export default defineConfig({
     port: Number(process.env.VITE_RENDERER_PORT || 5173),
     strictPort: true,
     proxy: {
-      '/v1': 'http://127.0.0.1:26866',
-      '/health': 'http://127.0.0.1:26866',
+      '/api': 'http://127.0.0.1:26866',
     },
   },
   resolve: {

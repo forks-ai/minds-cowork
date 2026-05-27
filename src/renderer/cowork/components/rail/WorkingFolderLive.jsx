@@ -278,7 +278,8 @@ export function WorkingFolderLive({ project, isStreaming }) {
         // silently failing.
         throw new Error('Delete is not available in the browser shell.');
       }
-      const result = await host.trashItem(a.path);
+      const trashTarget = a.folder || a.path;
+      const result = await host.trashItem(trashTarget);
       if (result && result.ok === false) {
         throw new Error(result.reason || 'Could not move to Trash.');
       }
