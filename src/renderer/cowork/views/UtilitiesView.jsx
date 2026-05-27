@@ -400,9 +400,9 @@ function MemoryView({ data, selected, onSelect, project, setData, setStatus }) {
               onSelect={onSelect}
             />
           )}
-          {projectSections.map((section) => (
+          {projectSections.map((section, idx) => (
             <MemorySectionList
-              key={section.projectName}
+              key={`${section.projectName}-${idx}`}
               heading={`Project · ${section.projectName}`}
               files={section.files}
               selected={selected}

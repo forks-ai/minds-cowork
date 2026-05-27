@@ -194,7 +194,16 @@ function reconcileTaskMessages(messages, isLive, isServerInFlight = false) {
   // Step-cleanup (RUNNING_STEP_STATUSES → completed) is also skipped
   // here: those steps may still be progressing under the live tail
   // and we don't want to prematurely flag them done.
-  if (isServerInFlight) return messages;
+  if (isServerInFlight) {
+    // If the conversation is in-flight but has no visible content yet
+    // (e.g. a scheduled task that just started), show a thinking
+    // placeholder so the user sees activity instead of a blank chat.
+    const hasContent = messages.length > 0 && messages.some(
+      (m) => m && (m.role === 'assistant' || m.role === '_streaming'),
+    );
+    if (!hasContent) return withThinkingPlaceholder(messages, { label: 'Running task…' });
+    return messages;
+  }
   const hadStreaming = messages.some((m) => m && m.role === '_streaming');
   // Pass 1 — strip _streaming + activity placeholders, mark
   // running steps as completed. Each rewritten message gets a flag
@@ -1520,7 +1529,11 @@ function AppCore() {
       // view doesn't render empty.
       if (!task.messages || task.messages.length === 0) {
         fetchSession(id).then((fresh) => {
-          if (!fresh || !Array.isArray(fresh.messages) || fresh.messages.length === 0) return;
+          if (!fresh || !Array.isArray(fresh.messages)) return;
+          // Server-in-flight conversations may have no messages yet
+          // (e.g. a scheduled task that just started). Don't bail —
+          // reconcile will inject a thinking placeholder.
+          if (fresh.messages.length === 0 && !isServerInFlight) return;
           // Two layers of restoration, in order of trust:
           //   1. Server sidecar (`{cid}_turns.json`) — events for each
           //      assistant turn, replayed through the same reducer the
@@ -2647,7 +2660,7 @@ function AppCore() {
     deletedTaskIdsRef.current.add(taskId);
     setTasks((prev) => prev.filter((t) => t.id !== taskId));
     // Optimistically remove from pins so the sidebar clears immediately.
-    setPins((prev) => prev.filter((p) => p.id !== taskId));
+    setPins((prev) => prev.filter((p) => p.item_id !== taskId));
     if (activeTaskId === taskId) {
       setActiveTaskId(null);
       // Only fall back to home when we're *viewing* the task that
@@ -2762,7 +2775,7 @@ function AppCore() {
       t.projectName !== project.name && t.projectPath !== project.path
     ));
     if (selectedProject?.name === project.name) setSelectedProject(null);
-    try { await deleteProject(project.name); } catch (e) {
+    try { await deleteProject(project); } catch (e) {
       // eslint-disable-next-line no-console
       console.error('[performDeleteProject] failed', e);
     }
@@ -2828,7 +2841,13 @@ function AppCore() {
   };
 
   const handleRunScheduleNow = async (id) => {
-    await runScheduleNow(id);
+    const result = await runScheduleNow(id);
+    // The server creates the conversation eagerly and returns its id.
+    // Mark it in-flight locally so reconcileTaskMessages doesn't inject
+    // a spurious "got interrupted" prompt before the 5s poll catches up.
+    if (result?.conversation_id) {
+      markInFlight(result.conversation_id);
+    }
     await refreshSchedules();
     refreshData();
   };
