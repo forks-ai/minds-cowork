@@ -3,20 +3,20 @@ import { createPortal } from 'react-dom';
 
 type View = 'main' | 'terms' | 'privacy';
 
-const TERMS_TEXT = `MindsDB Digital Website Terms of Use
-Last Updated: September 24, 2024
+const TERMS_TEXT = `Terms of Service
+Last updated: May 14, 2026
 
-Welcome, and thank you for your interest in MindsDB, Inc. ("MindsDB," "we," or "us") and our websites at https://mindsdb.com, https://docs.mindsdb.com, https://mdb.ai, and https://docs.mdb.ai and related website (collectively, the "Sites"). These Terms of Use are a legally binding contract between you and MindsDB regarding your use of the Sites. Please read the following terms carefully before using the Sites.
+Welcome, and thank you for your interest in MindsDB, Inc. (“MindsDB,” “we,” or “us”) and our websites at https://mindshub.ai, https://mindsdb.com, https://mdb.ai, and related websites and subdomains (collectively, the “Sites”). These Terms of Use are a legally binding contract between you and MindsDB regarding your use of the Sites. Please read the following terms carefully before using the Sites.
 
-These terms do not apply to your access to or use of MindsDB's products, services, or other offerings ("MindsDB Offerings"). MindsDB Offerings are subject to separate agreements between you and MindsDB concerning such MindsDB Offerings.
+These terms do not apply to your access to or use of MindsDB’s products, services, or other offerings (“MindsDB Offerings”). MindsDB Offerings are subject to separate agreements between you and MindsDB concerning such MindsDB Offerings.
 
-By using the Sites, you acknowledge that you have read, understood, and agree to be bound by the following terms and conditions, including the MindsDB Privacy Policy at https://mindsdb.com/privacy-policy (together, the "Terms"). If you are not eligible, or you do not agree to the Terms, then you do not have our permission to use the Sites.
+By using the Sites, you acknowledge that you have read, understood, and agree to be bound by the following terms and conditions, including the MindsDB Privacy Policy at /privacy-policy (together, the “Terms”). If you are not eligible, or you do not agree to the Terms, then you do not have our permission to use the Sites.
 
 Eligibility
 You must be at least 18 years of age to use the Sites. By agreeing to these Terms, you represent and warrant to us that: (a) you are at least 18 years of age; and (b) your use of the Sites is in compliance with any and all applicable laws and regulations. If you are an entity, organization, or company, the individual accepting these Terms on your behalf represents and warrants that they have authority to bind you to these Terms and you agree to be bound by these Terms.
 
 Changes to the Terms
-We may periodically make changes to these Terms. When we do, we will update the "Last Updated" date above. It is your responsibility to review the most recent version of these Terms and remain informed of any changes. You agree that your continued use of a Site after the effective date of any changes will constitute your acceptance of the changed Terms for your continued use. Disputes arising under these Terms will be resolved in accordance with the version of these Terms that was in effect at the time the dispute arose.
+We may periodically make changes to these Terms. When we do, we will update the “Last Updated” date above. It is your responsibility to review the most recent version of these Terms and remain informed of any changes. You agree that your continued use of a Site after the effective date of any changes will constitute your acceptance of the changed Terms for your continued use. Disputes arising under these Terms will be resolved in accordance with the version of these Terms that was in effect at the time the dispute arose.
 
 Changes to the Sites
 We reserve the right to modify or discontinue, temporarily or permanently, all or a part of the Sites without notice. We will not be liable to you or to any third party for any modification, suspension, or discontinuance of the Sites.
@@ -25,10 +25,10 @@ Limited License
 Subject to these Terms, MindsDB grants you a limited, revocable license to access and use the Sites to learn more about our products and services. No other use of the Sites is authorized.
 
 Restrictions
-You must comply with all applicable laws when using the Sites. Except as may be expressly permitted by applicable law or expressly permitted by us in writing, you will not, and will not permit anyone else to: (a) store, copy, modify, distribute, or resell any information or material available on the Sites ("Site Content") or compile or collect any Site Content as part of a database or other work; (b) use any automated tool (e.g., robots, spiders) to use the Sites or store, copy, modify, distribute, or resell any Site Content; (c) rent, lease, or sublicense your access to the Sites; (d) use the Sites or Site Content for any purpose except for your own personal use; (e) circumvent or disable any digital rights management, usage rules, or other security features of the Sites; (f) reproduce, modify, translate, enhance, decompile, disassemble, reverse engineer, or create derivative works of the Sites; (g) use the Sites in a manner that threatens the integrity, performance, or availability of the Sites; or (h) remove, alter, or obscure any proprietary notices (including copyright notices) on any portion of the Sites or Site Content.
+You must comply with all applicable laws when using the Sites. Except as may be expressly permitted by applicable law or expressly permitted by us in writing, you will not, and will not permit anyone else to: (a) store, copy, modify, distribute, or resell any information or material available on the Sites (“Site Content”) or compile or collect any Site Content as part of a database or other work; (b) use any automated tool (e.g., robots, spiders) to use the Sites or store, copy, modify, distribute, or resell any Site Content; (c) rent, lease, or sublicense your access to the Sites; (d) use the Sites or Site Content for any purpose except for your own personal use; (e) circumvent or disable any digital rights management, usage rules, or other security features of the Sites; (f) reproduce, modify, translate, enhance, decompile, disassemble, reverse engineer, or create derivative works of the Sites; (g) use the Sites in a manner that threatens the integrity, performance, or availability of the Sites; or (h) remove, alter, or obscure any proprietary notices (including copyright notices) on any portion of the Sites or Site Content.
 
 Ownership
-The Sites are owned and operated by MindsDB Inc. We or our licensors retain all right, title, and interest in and to the Sites and Site Content and any trademarks, logos, or service marks displayed on the Sites or in Site Content ("Marks"). The Sites, Site Content, and Marks are protected by applicable intellectual property laws and international treaties. Except as expressly authorized by MindsDB, you may not make use of the Sites, Site Content, and Marks.
+The Sites are owned and operated by MindsDB Inc. We or our licensors retain all right, title, and interest in and to the Sites and Site Content and any trademarks, logos, or service marks displayed on the Sites or in Site Content (“Marks”). The Sites, Site Content, and Marks are protected by applicable intellectual property laws and international treaties. Except as expressly authorized by MindsDB, you may not make use of the Sites, Site Content, and Marks.
 
 Privacy Policy
 Please read the MindsDB Privacy Policy carefully for information relating to our collection, use, storage, disclosure of your personal information. The Privacy Policy is incorporated by this reference into, and made a part of, these Terms.
@@ -39,13 +39,13 @@ The Sites may contain links to third party products, services, and websites. We 
 Additionally, if you follow a link or otherwise navigate away from the Sites, please be aware that these Terms will no longer govern. You should review the applicable terms and policies, including privacy and data gathering practices, of any third-party websites to which you navigate to from the Sites.
 
 Feedback
-MindsDB may provide you with a mechanism to provide feedback, suggestions, and ideas about the Sites or us ("Feedback"). You agree that we may, in our sole discretion, use the Feedback you provide in any way, including in future modifications to the Sites, our products, or services. You hereby grant us an unrestricted, perpetual, worldwide, fully transferable, irrevocable, royalty-free right to exploit the Feedback in any manner for any purpose.
+MindsDB may provide you with a mechanism to provide feedback, suggestions, and ideas about the Sites or us (“Feedback”). You agree that we may, in our sole discretion, use the Feedback you provide in any way, including in future modifications to the Sites, our products, or services. You hereby grant us an unrestricted, perpetual, worldwide, fully transferable, irrevocable, royalty-free right to exploit the Feedback in any manner for any purpose.
 
 Disclaimer of Warranties
-YOUR USE OF THE SITES AND SITE CONTENT IS AT YOUR SOLE RISK. THE SITES AND SITE CONTENT ARE PROVIDED ON AN "AS IS" AND "AS AVAILABLE" BASIS. MINDSDB EXPRESSLY DISCLAIMS ALL WARRANTIES OF ANY KIND, WHETHER EXPRESS OR IMPLIED, INCLUDING, BUT NOT LIMITED TO THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT. WE DO NOT GUARANTEE THE ACCURACY, COMPLETENESS, OR USEFULNESS OF THE SITES OR SITE CONTENT, AND YOU RELY ON THE SITES AND SITE CONTENT AT YOUR OWN RISK. ANY MATERIAL OBTAINED THROUGH THE SITES IS DONE AT YOUR OWN DISCRETION AND RISK AND YOU WILL BE SOLELY RESPONSIBLE FOR ANY DAMAGE TO YOUR COMPUTER OR LOSS OF DATA THAT RESULTS FROM THE DOWNLOAD OF ANY MATERIAL THROUGH THE SITES. NO ADVICE OR INFORMATION, WHETHER ORAL OR WRITTEN, OBTAINED BY YOU FROM MINDSDB OR THROUGH OR FROM THE SITES WILL CREATE ANY WARRANTY NOT EXPRESSLY STATED IN THIS AGREEMENT. HOWEVER, MINDSDB DOES NOT DISCLAIM ANY WARRANTY OR OTHER RIGHT THAT MINDSDB IS PROHIBITED FROM DISCLAIMING UNDER APPLICABLE LAW.
+YOUR USE OF THE SITES AND SITE CONTENT IS AT YOUR SOLE RISK. THE SITES AND SITE CONTENT ARE PROVIDED ON AN “AS IS” AND “AS AVAILABLE” BASIS. MINDSDB EXPRESSLY DISCLAIMS ALL WARRANTIES OF ANY KIND, WHETHER EXPRESS OR IMPLIED, INCLUDING, BUT NOT LIMITED TO THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT. WE DO NOT GUARANTEE THE ACCURACY, COMPLETENESS, OR USEFULNESS OF THE SITES OR SITE CONTENT, AND YOU RELY ON THE SITES AND SITE CONTENT AT YOUR OWN RISK. ANY MATERIAL OBTAINED THROUGH THE SITES IS DONE AT YOUR OWN DISCRETION AND RISK AND YOU WILL BE SOLELY RESPONSIBLE FOR ANY DAMAGE TO YOUR COMPUTER OR LOSS OF DATA THAT RESULTS FROM THE DOWNLOAD OF ANY MATERIAL THROUGH THE SITES. NO ADVICE OR INFORMATION, WHETHER ORAL OR WRITTEN, OBTAINED BY YOU FROM MINDSDB OR THROUGH OR FROM THE SITES WILL CREATE ANY WARRANTY NOT EXPRESSLY STATED IN THIS AGREEMENT. HOWEVER, MINDSDB DOES NOT DISCLAIM ANY WARRANTY OR OTHER RIGHT THAT MINDSDB IS PROHIBITED FROM DISCLAIMING UNDER APPLICABLE LAW.
 
 Limitation of Liability
-MINDSDB WILL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR EXEMPLARY DAMAGES, INCLUDING BUT NOT LIMITED TO, DAMAGES FOR LOSS OF PROFITS, GOODWILL, USE, DATA OR OTHER INTANGIBLE LOSSES (EVEN IF MINDSDB HAS BEEN ADVISED OF THE POSSIBILITY OF THESE DAMAGES), RESULTING FROM YOUR USE OF THE SITES AND SITE CONTENT. UNDER NO CIRCUMSTANCES WILL MINDSDB'S TOTAL LIABILITY OF ALL KINDS ARISING OUT OF OR RELATED TO YOUR USE OF THE SITES OR SITE CONTENT (INCLUDING BUT NOT LIMITED TO WARRANTY CLAIMS), REGARDLESS OF THE FORUM AND REGARDLESS OF WHETHER ANY ACTION OR CLAIM IS BASED ON CONTRACT, TORT, OR OTHERWISE, EXCEED $50. BECAUSE SOME STATES DO NOT ALLOW THE EXCLUSION OR LIMITATION OF LIABILITY FOR CONSEQUENTIAL OR INCIDENTAL DAMAGES, THE ABOVE LIMITATION MAY NOT APPLY TO YOU.
+MINDSDB WILL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR EXEMPLARY DAMAGES, INCLUDING BUT NOT LIMITED TO, DAMAGES FOR LOSS OF PROFITS, GOODWILL, USE, DATA OR OTHER INTANGIBLE LOSSES (EVEN IF MINDSDB HAS BEEN ADVISED OF THE POSSIBILITY OF THESE DAMAGES), RESULTING FROM YOUR USE OF THE SITES AND SITE CONTENT. UNDER NO CIRCUMSTANCES WILL MINDSDB’S TOTAL LIABILITY OF ALL KINDS ARISING OUT OF OR RELATED TO YOUR USE OF THE SITES OR SITE CONTENT (INCLUDING BUT NOT LIMITED TO WARRANTY CLAIMS), REGARDLESS OF THE FORUM AND REGARDLESS OF WHETHER ANY ACTION OR CLAIM IS BASED ON CONTRACT, TORT, OR OTHERWISE, EXCEED $50. BECAUSE SOME STATES DO NOT ALLOW THE EXCLUSION OR LIMITATION OF LIABILITY FOR CONSEQUENTIAL OR INCIDENTAL DAMAGES, THE ABOVE LIMITATION MAY NOT APPLY TO YOU.
 
 EACH PROVISION OF THESE TERMS THAT PROVIDES FOR A LIMITATION OF LIABILITY, DISCLAIMER OF WARRANTIES, OR EXCLUSION OF DAMAGES IS INTENDED TO AND DOES ALLOCATE THE RISKS BETWEEN THE PARTIES UNDER THESE TERMS. THIS ALLOCATION IS AN ESSENTIAL ELEMENT OF THE BASIS OF THE BARGAIN BETWEEN THE PARTIES. EACH OF THESE PROVISIONS IS SEVERABLE AND INDEPENDENT OF ALL OTHER PROVISIONS OF THESE TERMS. THE LIMITATIONS IN THIS SECTION WILL APPLY EVEN IF ANY LIMITED REMEDY FAILS OF ITS ESSENTIAL PURPOSE.
 
@@ -53,7 +53,7 @@ Indemnity
 You will indemnify and hold MindsDB, and affiliates, officers, agents, and employees, harmless from any costs, damages, expenses, and liability caused by your use of the Sites or Site Content, your violation of these Terms, or your violation of any rights of a third party through use of the Sites or Site Content. We reserve the right, at our own expense, to assume the exclusive defense and control of any matter otherwise subject to indemnification by you (without limiting your indemnification obligations with respect to that matter), and in that case, you agree to cooperate with our defense of those claims.
 
 General Terms
-These Terms, together with the Privacy Policy and any other agreements expressly incorporated by reference into these Terms, are the entire and exclusive understanding and agreement between you and MindsDB regarding your use of the Sites. You may not assign or transfer these Terms or your rights under these Terms, in whole or in part, by operation of law or otherwise, without our prior written consent. We may assign these Terms at any time without notice or consent. The failure to require performance of any provision will not affect our right to require performance at any other time after that, nor will a waiver by us of any breach or default of these Terms, or any provision of these Terms, be a waiver of any subsequent breach or default or a waiver of the provision itself. Use of section headers in these Terms is for convenience only and will not have any impact on the interpretation of any provision. Throughout these Terms the use of the word "including" means "including but not limited to". If any part of these Terms is held to be invalid or unenforceable, the unenforceable part will be given effect to the greatest extent possible, and the remaining parts will remain in full force and effect.
+These Terms, together with the Privacy Policy and any other agreements expressly incorporated by reference into these Terms, are the entire and exclusive understanding and agreement between you and MindsDB regarding your use of the Sites. You may not assign or transfer these Terms or your rights under these Terms, in whole or in part, by operation of law or otherwise, without our prior written consent. We may assign these Terms at any time without notice or consent. The failure to require performance of any provision will not affect our right to require performance at any other time after that, nor will a waiver by us of any breach or default of these Terms, or any provision of these Terms, be a waiver of any subsequent breach or default or a waiver of the provision itself. Use of section headers in these Terms is for convenience only and will not have any impact on the interpretation of any provision. Throughout these Terms the use of the word “including” means “including but not limited to”. If any part of these Terms is held to be invalid or unenforceable, the unenforceable part will be given effect to the greatest extent possible, and the remaining parts will remain in full force and effect.
 
 Legal Notices
 These Terms are governed by the laws of the state of California without regard to conflict of law principles. The exclusive jurisdiction and venue for any claims arising out of or related to these Terms or your use of the Sites will lie in the state and federal courts located in San Francisco, California, and you irrevocably agree to submit to the jurisdiction of such courts. The failure of MindsDB to enforce any right or provision in these Terms will not constitute a waiver of such right or provision unless acknowledged and agreed to by MindsDB in writing. In the event that a court of competent jurisdiction finds any provision of these Terms to be illegal, invalid or unenforceable, the remaining provisions will remain in full force and effect.
@@ -62,7 +62,7 @@ Contacting MindsDB
 If you have any questions or concerns about the Sites or these Terms, you may contact us by email at hello@mindsdb.com, or write to us at:
 
 MindsDB
-3277 S White Rd PMB 10166,
+3277 S White Rd PMB 10166
 San Jose, CA 95148
 USA`;
 
@@ -227,7 +227,7 @@ export default function TermsConsent({ onAccept }: { onAccept: () => void }) {
         <div className="legal-viewer">
           <div className="legal-viewer-header">
             <span className="legal-viewer-title">
-              {isTerms ? 'Terms and Conditions' : 'Privacy Policy'}
+              {isTerms ? 'Terms of Service' : 'Privacy Policy'}
             </span>
           </div>
           <div className="legal-viewer-body">
@@ -261,7 +261,7 @@ export default function TermsConsent({ onAccept }: { onAccept: () => void }) {
         <div className="terms-links">
           <button className="terms-link-btn" onClick={() => setView('terms')}>
             <span className="terms-link-icon">{'\u2192'}</span>
-            Terms and Conditions
+            Terms of Service
           </button>
           <button className="terms-link-btn" onClick={() => setView('privacy')}>
             <span className="terms-link-icon">{'\u2192'}</span>
@@ -278,7 +278,7 @@ export default function TermsConsent({ onAccept }: { onAccept: () => void }) {
           />
           <span className="terms-checkbox-text">
             I have read and agree with MindsDB{' '}
-            <button className="terms-inline-link" onClick={() => setView('terms')}>Terms and Conditions</button>
+            <button className="terms-inline-link" onClick={() => setView('terms')}>Terms of Service</button>
             {' '}and{' '}
             <button className="terms-inline-link" onClick={() => setView('privacy')}>Privacy Policy</button>.
             {' '}I understand that by checking this box, I am providing my consent to be bound by these terms.
