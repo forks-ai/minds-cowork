@@ -1198,28 +1198,23 @@ class RawSettingsBody(BaseModel):
 
 @router.post("/raw")
 async def write_raw_settings(body: RawSettingsBody):
-    """Replace ~/.anton/.env with the supplied dotenv content. Mirrors
-    the Electron `saveSettings` IPC. Onboarding builds the lines
-    locally (provider, model, keys) and posts the joined string."""
+    """Merge the supplied dotenv content into ~/.anton/.env (key-level upsert).
+    Uses the same _write_dotenv helper as PUT /settings so that keys not present
+    in the incoming content are preserved — prevents hourly token refresh from
+    wiping model config and other unrelated settings."""
     try:
-        GLOBAL_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            GLOBAL_ENV_PATH.parent.chmod(0o700)
-        except OSError:
-            pass
-        GLOBAL_ENV_PATH.write_text(body.content + "\n", encoding="utf-8")
-        try:
-            GLOBAL_ENV_PATH.chmod(0o600)
-        except OSError:
-            pass
-        # Reflect the writes in the running process so subsequent
-        # health checks pick them up without a server restart.
+        incoming: dict[str, str] = {}
         for line in body.content.splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, _, val = line.partition("=")
-            os.environ[key.strip()] = val.strip().strip('"').strip("'")
+            incoming[key.strip()] = val.strip().strip('"').strip("'")
+        _write_dotenv(GLOBAL_ENV_PATH, incoming)
+        # Reflect the writes in the running process so subsequent
+        # health checks pick them up without a server restart.
+        for k, v in incoming.items():
+            os.environ[k] = v
     except Exception as e:
         logger.warning("Failed to write raw settings: %s", e)
         raise HTTPException(status_code=500, detail="Settings could not be saved.") from e

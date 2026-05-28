@@ -8,6 +8,8 @@ import { IPC } from '../shared/ipc-channels';
 import { checkAntonInstalled, checkInstallStatus, runInstaller } from './installer';
 import { startServer, stopServer, isServerRunning, isServerStarting, getServerPort, getServerDiagnostics } from './server-process';
 import { oauthConnect } from './oauth-service';
+import { saveTokens, getAccessToken, getRefreshToken, clearTokens } from './token-store';
+import { silentRefresh, writeTokenToEnvAndRestartServer, scheduleRefresh } from './minds-auth';
 import { sendEvent } from './analytics';
 import { getRendererPath, getBundledPath, checkForUIUpdate, applyUIUpdate, hasInternet, getCachedVersion } from './ui-updater';
 import type { UpdateCheckResult } from './ui-updater';
@@ -404,7 +406,25 @@ function setupIPC() {
   // default browser. The renderer hands over either Anton's hosted
   // client_id (Pattern A) or BYOK client_id + client_secret (Pattern B).
   ipcMain.handle('oauth:connect', async (_event, opts) => {
-    return oauthConnect(opts || {});
+    const result = await oauthConnect(opts || {});
+    if (result.ok && opts?.clientId === 'anton-desktop' && result.access_token) {
+      saveTokens(result.access_token, result.expires_in ?? 3600, result.refresh_token ?? '');
+      await writeTokenToEnvAndRestartServer(result.access_token);
+      scheduleRefresh(result.expires_in ?? 3600);
+    }
+    return result;
+  });
+
+  ipcMain.handle(IPC.AUTH_GET_ACCESS_TOKEN, () => getAccessToken());
+  ipcMain.handle(IPC.AUTH_LOGOUT, async () => {
+    clearTokens();
+    const envPath = getAntonEnvPath();
+    if (fs.existsSync(envPath)) {
+      const lines = fs.readFileSync(envPath, 'utf-8').split('\n')
+        .filter(l => !l.startsWith('ANTON_MINDS_API_KEY=') && !l.startsWith('ANTON_OPENAI_API_KEY='));
+      fs.writeFileSync(envPath, lines.join('\n'), 'utf-8');
+    }
+    await stopServer();
   });
 
   ipcMain.handle(IPC.INSTALL_CANCEL, async () => {
@@ -423,7 +443,18 @@ function setupIPC() {
       fs.mkdirSync(antonDir, { recursive: true });
     }
     const envPath = path.join(antonDir, '.env');
-    fs.writeFileSync(envPath, content + '\n', 'utf-8');
+    const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
+    const merged = new Map<string, string>();
+    for (const line of existing.split('\n')) {
+      const eq = line.indexOf('=');
+      if (eq > 0) merged.set(line.slice(0, eq), line.slice(eq + 1));
+    }
+    for (const line of content.split('\n')) {
+      const eq = line.indexOf('=');
+      if (eq > 0) merged.set(line.slice(0, eq), line.slice(eq + 1));
+    }
+    const out = [...merged.entries()].map(([k, v]) => `${k}=${v}`).join('\n') + '\n';
+    fs.writeFileSync(envPath, out, 'utf-8');
 
     // Analytics — fire-and-forget, never blocks
     if (content.includes('ANTON_TERMS_CONSENT=true')) {
@@ -620,6 +651,24 @@ app.whenReady().then(() => {
       console.warn('[server] skipped: server deps missing from tool venv. Run installer to repair.');
       return;
     }
+    // If MindsHub SSO tokens are stored, silently refresh before the Python
+    // server starts — it reads .env at boot and needs a valid JWT.
+    const existingRefresh = getRefreshToken();
+    if (existingRefresh) {
+      const ok = await silentRefresh();
+      if (!ok) {
+        // Refresh token expired — clear so checkConfigured() returns false
+        // and the renderer routes back to onboarding.
+        clearTokens();
+        const envPath = getAntonEnvPath();
+        if (fs.existsSync(envPath)) {
+          const lines = fs.readFileSync(envPath, 'utf-8').split('\n')
+            .filter(l => !l.startsWith('ANTON_OPENAI_API_KEY=') && !l.startsWith('ANTON_MINDS_API_KEY='));
+          fs.writeFileSync(envPath, lines.join('\n'), 'utf-8');
+        }
+      }
+    }
+
     const result = await startServer();
     if (!result.ok) {
       console.error(`[server] start failed: ${result.reason}`);
