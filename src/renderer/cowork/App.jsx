@@ -2647,7 +2647,7 @@ function AppCore() {
     deletedTaskIdsRef.current.add(taskId);
     setTasks((prev) => prev.filter((t) => t.id !== taskId));
     // Optimistically remove from pins so the sidebar clears immediately.
-    setPins((prev) => prev.filter((p) => p.id !== taskId));
+    setPins((prev) => prev.filter((p) => p.item_id !== taskId));
     if (activeTaskId === taskId) {
       setActiveTaskId(null);
       // Only fall back to home when we're *viewing* the task that
@@ -2762,7 +2762,7 @@ function AppCore() {
       t.projectName !== project.name && t.projectPath !== project.path
     ));
     if (selectedProject?.name === project.name) setSelectedProject(null);
-    try { await deleteProject(project.name); } catch (e) {
+    try { await deleteProject(project); } catch (e) {
       // eslint-disable-next-line no-console
       console.error('[performDeleteProject] failed', e);
     }
