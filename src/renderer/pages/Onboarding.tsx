@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { host } from '../platform/host';
 import OrbitMorph from '../cowork/components/ui/OrbitMorph';
 
@@ -26,7 +26,7 @@ const GEMINI_MODELS = [
 ];
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
-const MINDS_REGISTER_URL = 'https://auth.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/registrations?client_id=public-client&response_type=code&scope=openid&redirect_uri=https%3A%2F%2Fconsole.mindshub.ai';
+const MINDS_REGISTER_URL = 'https://auth.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/registrations?client_id=anton-desktop&response_type=code&scope=openid&redirect_uri=http%3A%2F%2F127.0.0.1';
 
 const CUSTOM_MODEL = '__custom__';
 
@@ -282,6 +282,49 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
     setPhase('success');
     setTimeout(onComplete, 800);
   };
+
+  const handleMindsSSO = async () => {
+    setPhase('validating');
+    setErrorMsg('');
+    const result = await host.oauthConnect({
+      clientId: 'anton-desktop',
+      authUrl: 'https://auth.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/auth',
+      tokenUrl: 'https://auth.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/token',
+      scopes: ['openid', 'profile', 'email', 'organization', 'offline_access'],
+    });
+    if (!result.ok) {
+      setPhase('error');
+      setErrorMsg('Sign in cancelled or failed. Please try again.');
+      return;
+    }
+    // Token keys already written to .env by the oauth:connect IPC handler.
+    // SETTINGS_SAVE is merge-write, so these config keys won't clobber them.
+    await saveFinal([
+      'ANTON_TERMS_CONSENT=true',
+      'ANTON_MINDS_ENABLED=true',
+      'ANTON_MINDS_URL=https://api.mindshub.ai',
+      'ANTON_PLANNING_PROVIDER=openai-compatible',
+      'ANTON_CODING_PROVIDER=openai-compatible',
+      'ANTON_PLANNING_MODEL=_reason_',
+      'ANTON_CODING_MODEL=_code_',
+    ]);
+  };
+
+  // Web: ReactKeycloakProvider with onLoad:'login-required' redirects to Keycloak
+  // before the app renders. On remount after redirect, keycloak.authenticated is
+  // already true — detect it and auto-advance without showing a button.
+  // On Electron the early return fires before the import, so keycloak-js is never
+  // loaded in the Electron renderer.
+  useEffect(() => {
+    if (!host.isWeb) return;
+    if (provider !== 'minds') return;
+    let cancelled = false;
+    import('../lib/keycloak').then(({ keycloak }) => {
+      if (cancelled || !keycloak.authenticated) return;
+      handleMindsSSO();
+    });
+    return () => { cancelled = true; };
+  }, [provider]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Step 2: BYOK LLM provider selection. Covers two entry points —
   //   1) `minds-no-llm` after a Minds validation succeeded but no LLM
@@ -542,51 +585,58 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
           </div>
         )}
 
-        <div className="onboard-field">
-          <label className="onboard-label">
-            {provider === 'minds'
-              ? 'Minds Cloud API Key'
-              : byokProvider === 'anthropic'
+        {host.isElectron && provider === 'minds' ? (
+          <div className="onboard-field" style={{ alignItems: 'center' }}>
+            <button
+              className="btn-primary"
+              disabled={phase === 'validating'}
+              onClick={handleMindsSSO}
+              style={{ width: '100%' }}
+            >
+              {phase === 'validating' ? 'SIGNING IN...' : 'SIGN IN WITH MINDSHUB'}
+            </button>
+            <div className="settings-hint" style={{ textAlign: 'center' }}>
+              Don't have an account?{' '}
+              <span
+                className="onboard-link"
+                onClick={() => host.openExternal(MINDS_REGISTER_URL)}
+              >
+                Sign up for a free week
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="onboard-field">
+            <label className="onboard-label">
+              {byokProvider === 'anthropic'
                 ? 'Anthropic API Key'
                 : byokProvider === 'gemini'
                   ? 'Google AI API Key'
                   : byokProvider === 'openai-compatible'
                     ? 'API Key (optional)'
                     : 'OpenAI API Key'}
-          </label>
-          <input
-            type="password"
-            className="settings-input"
-            placeholder={provider === 'minds'
-              ? 'Your Minds Cloud API key'
-              : byokProvider === 'anthropic'
+            </label>
+            <input
+              type="password"
+              className="settings-input"
+              placeholder={byokProvider === 'anthropic'
                 ? 'sk-ant-...'
                 : byokProvider === 'gemini'
                   ? 'AIza...'
                   : byokProvider === 'openai-compatible'
                     ? 'Enter to skip if not needed'
                     : 'sk-...'}
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            disabled={phase === 'validating'}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && canConnect && phase !== 'validating') {
-                handleConnect();
-              }
-            }}
-          />
-          {provider === 'minds' && (
-            <div className="settings-hint">
-              Don't have a key?{' '}
-              <span
-                className="onboard-link"
-                onClick={() => host.openExternal(MINDS_REGISTER_URL)}
-              >
-                Sign up at mindshub.ai for a free week
-              </span>
-            </div>
-          )}
-        </div>
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              disabled={phase === 'validating'}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && canConnect && phase !== 'validating') {
+                  handleConnect();
+                }
+              }}
+            />
+          </div>
+        )}
       </div>
 
       {/* Validation status */}
@@ -624,8 +674,8 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
         <div className="error-message">{errorMsg}</div>
       )}
 
-      {/* Connect button */}
-      {phase !== 'success' && (
+      {/* Connect button — hidden for Electron MindsHub SSO path (button is inline above) */}
+      {phase !== 'success' && !(host.isElectron && provider === 'minds') && (
         <button
           className="btn-primary"
           disabled={!canConnect || phase === 'validating'}

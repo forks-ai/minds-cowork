@@ -385,6 +385,14 @@ export async function oauthConnect(opts: OAuthConnectOpts): Promise<OAuthConnect
   return { ok: false, reason: 'OAuth IPC flow is Electron-only — use redirect-based OAuth in web.' };
 }
 
+export async function getAccessToken(): Promise<string | null> {
+  if (isElectron && typeof bridge.getAccessToken === 'function') {
+    return bridge.getAccessToken();
+  }
+  const { getAccessToken: kcGetToken } = await import('../lib/keycloak');
+  return kcGetToken();
+}
+
 // Re-export a single namespace for ergonomic call sites (`host.openPath(...)`).
 export const host = {
   isWeb,
@@ -418,6 +426,7 @@ export const host = {
   onUpdateStatus,
   applyUpdate,
   oauthConnect,
+  getAccessToken,
 };
 
 export default host;
