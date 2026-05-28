@@ -43,6 +43,9 @@ let stopRefresh: (() => void) | null = null;
 function handleKeycloakEvent(event: string): void {
   if (event === 'onAuthSuccess') {
     stopRefresh?.();
+    if (keycloak.token) {
+      host.saveSettings(MINDS_ENV(keycloak.token)).catch(() => {});
+    }
     stopRefresh = scheduleWebTokenRefresh(async (token) => {
       await host.saveSettings(MINDS_ENV(token));
     });

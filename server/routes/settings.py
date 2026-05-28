@@ -1426,6 +1426,8 @@ async def check_configured():
     Electron `checkConfigured` IPC: a key being present is enough — we
     don't ping the provider here (validate-provider does that)."""
     env = _read_dotenv(GLOBAL_ENV_PATH)
+    if env.get("ANTON_TERMS_CONSENT") != "true":
+        return {"configured": False, "provider": ""}
     if env.get("ANTON_ANTHROPIC_API_KEY") or os.environ.get("ANTON_ANTHROPIC_API_KEY"):
         return {"configured": True, "provider": "anthropic"}
     if (env.get("ANTON_OPENAI_API_KEY") or os.environ.get("ANTON_OPENAI_API_KEY")) and (

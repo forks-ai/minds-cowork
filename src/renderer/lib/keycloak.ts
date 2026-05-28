@@ -1,7 +1,7 @@
 import Keycloak from 'keycloak-js';
 
 const keycloak = new Keycloak({
-  url: 'https://auth.mindshub.ai/auth',
+  url: 'https://auth.dev.mindshub.ai/auth',
   realm: 'mindsdb',
   clientId: 'anton-desktop',
 });
