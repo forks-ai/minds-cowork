@@ -98,8 +98,13 @@ function getDevServerDir(): string | null {
 // `uv tool install cowork-server`). Lives in ~/.local/bin on
 // POSIX, %LOCALAPPDATA%/bin on Windows.
 function getCoworkServerBin(): string | null {
-  const localBin = path.join(os.homedir(), '.local', 'bin', 'cowork-server');
-  if (fs.existsSync(localBin)) return localBin;
+  const localBin = path.join(os.homedir(), '.local', 'bin');
+  const localCandidate = path.join(localBin, process.platform === 'win32' ? 'cowork-server.exe' : 'cowork-server');
+  if (fs.existsSync(localCandidate)) return localCandidate;
+  if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
+    const winCandidate = path.join(process.env.LOCALAPPDATA, 'bin', 'cowork-server.exe');
+    if (fs.existsSync(winCandidate)) return winCandidate;
+  }
   return null;
 }
 
