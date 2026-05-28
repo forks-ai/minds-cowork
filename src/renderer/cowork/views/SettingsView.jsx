@@ -1304,6 +1304,20 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
               </div>
             </CollapsibleGroup>
 
+            <CollapsibleGroup title="Agent">
+              <Section title="Harness" subtitle="Which AI agent powers your tasks. Anton is the default; Hermes is an alternative agent with its own tool and memory system.">
+                <Segmented
+                  value={settings.harness || 'anton'}
+                  onChange={(v) => { setSetting('harness', v); setLlmDirty(true); }}
+                  groupLabel="Agent harness"
+                  options={[
+                    { value: 'anton',  label: 'Anton',  ariaLabel: 'Use Anton agent',  title: 'Anton — the default AI agent.' },
+                    { value: 'hermes', label: 'Hermes', ariaLabel: 'Use Hermes agent', title: 'Hermes — alternative agent with independent tools and memory.' },
+                  ]}
+                />
+              </Section>
+            </CollapsibleGroup>
+
             <CollapsibleGroup title="Agent Models">
               {(() => {
                 // MindsHub is the implicit fallback for any role that
