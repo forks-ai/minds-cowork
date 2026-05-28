@@ -58,6 +58,10 @@ contextBridge.exposeInMainWorld('antontron', {
     return () => ipcRenderer.removeListener(IPC.INSTALL_CANCELLED, listener);
   },
 
+  // Auth (Electron-only)
+  getAccessToken: () => ipcRenderer.invoke(IPC.AUTH_GET_ACCESS_TOKEN),
+  logout: () => ipcRenderer.invoke(IPC.AUTH_LOGOUT),
+
   // Settings / Onboarding
   readSettings: () => ipcRenderer.invoke(IPC.SETTINGS_READ),
   saveSettings: (content: string) => ipcRenderer.invoke(IPC.SETTINGS_SAVE, content),
