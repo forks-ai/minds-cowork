@@ -471,6 +471,14 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete }) 
   // Electron renderer runs from file://, where a relative URL wouldn't
   // resolve against the remote server).
   const canOpenLocalFile = host.isElectron && host.isLocalApiOrigin();
+  // When we can't open a local file (web, or a desktop app pointed at a
+  // remote server) the artifact's address is its HTTP serve URL, not an
+  // OS path the user can't reach — show that "private" URL in the header
+  // instead of the local path.
+  const serveRel = artifact?.serveUrl || '';
+  const privateUrl = (!canOpenLocalFile && serveRel)
+    ? (serveRel.startsWith('http') ? serveRel : `${host.getApiOrigin()}${serveRel}`)
+    : '';
   const onOpenOS = async () => {
     if (!canOpenLocalFile) {
       const rel = artifact?.serveUrl || '';
@@ -632,15 +640,23 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete }) 
                 }}
               >{artifact.description}</div>
             )}
-            <PathRow
-              label="local"
-              value={displayPath}
-              copyValue={actionPath}
-              onActivate={hasActionPath ? onOpenLocal : undefined}
-            />
+            {privateUrl ? (
+              <PathRow
+                label="private url"
+                value={privateUrl}
+                onActivate={onOpenOS}
+              />
+            ) : (
+              <PathRow
+                label="local"
+                value={displayPath}
+                copyValue={actionPath}
+                onActivate={hasActionPath ? onOpenLocal : undefined}
+              />
+            )}
             {publishedUrl && (
               <PathRow
-                label="remote"
+                label="public url"
                 value={publishedUrl}
                 accent
                 onActivate={onOpenPublished}

@@ -4,6 +4,7 @@
 // from file:// or app:// and must address the loopback server directly.
 
 import { initialStreamState, reduceStream } from './lib/responseStreamAdapter';
+import { host } from '../platform/host';
 
 const ANTON_SERVER_PORT = 26866;
 
@@ -799,6 +800,37 @@ export async function mountArtifactPreview(path) {
 
 export async function openArtifact(path) {
   return req('/artifacts/open', { method: 'POST', body: JSON.stringify({ path }) });
+}
+
+// Absolute "private" URL for an artifact's primary file: the
+// origin-relative `/v1/artifacts/serve/...` endpoint made absolute
+// against the current API origin. In the web build this is the
+// canonical address of the artifact — the file lives on the server,
+// not the user's machine — and in production it sits behind the auth
+// proxy, hence "private" (as opposed to the public `publishedUrl`).
+// Returns '' when the artifact has no serveable primary file yet.
+export function artifactServeUrl(artifact) {
+  const rel = artifact?.serveUrl || '';
+  if (!rel) return '';
+  return rel.startsWith('http') ? rel : `${host.getApiOrigin()}${rel}`;
+}
+
+// Open an artifact's primary file the right way for the current host.
+// Only the desktop app pointed at the local loopback server can hand an
+// OS path to the shell; in the browser (or a desktop app pointed at a
+// remote server) the file isn't on this machine, so we open its HTTP
+// serve URL instead — falling back to the published URL when the
+// artifact has no serveUrl yet.
+export async function openArtifactFile(artifact) {
+  const canOpenLocalFile = host.isElectron && host.isLocalApiOrigin();
+  if (!canOpenLocalFile) {
+    const url = artifactServeUrl(artifact) || artifact?.publishedUrl || '';
+    if (!url) return { ok: false, reason: 'no-serve-url' };
+    try { await host.openExternal(url); }
+    catch { window.open(url, '_blank', 'noreferrer'); }
+    return { ok: true };
+  }
+  return openArtifact(artifact?.path || '');
 }
 
 export async function revealArtifact(path) {
