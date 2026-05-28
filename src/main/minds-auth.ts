@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as path from 'path';
 
 const TOKEN_URL =
-  'https://auth.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/token';
+  'https://auth.dev.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/token';
 
 export async function silentRefresh(): Promise<boolean> {
   const refreshToken = getRefreshToken();

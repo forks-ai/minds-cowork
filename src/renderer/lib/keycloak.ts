@@ -1,6 +1,3 @@
-// NOTE: Web SSO is deferred. This file documents the intended integration
-// once a dedicated Keycloak web client is registered (see plan.md Step 7).
-// Replace 'anton-desktop' with the web client ID at that time.
 import Keycloak from 'keycloak-js';
 
 const keycloak = new Keycloak({

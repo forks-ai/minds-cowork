@@ -60,12 +60,9 @@ function getUpdateMode(): 'auto' | 'manual' {
 
 function checkConfigured(): { configured: boolean; provider: string } {
   const vars = readEnvFile();
-  if (vars.ANTON_ANTHROPIC_API_KEY) {
-    return { configured: true, provider: 'anthropic' };
-  }
-  if (vars.ANTON_OPENAI_API_KEY && vars.ANTON_OPENAI_BASE_URL) {
-    return { configured: true, provider: 'minds' };
-  }
+  if (vars.ANTON_TERMS_CONSENT !== 'true') return { configured: false, provider: '' };
+  if (vars.ANTON_ANTHROPIC_API_KEY) return { configured: true, provider: 'anthropic' };
+  if (vars.ANTON_OPENAI_API_KEY && vars.ANTON_OPENAI_BASE_URL) return { configured: true, provider: 'minds' };
   return { configured: false, provider: '' };
 }
 

@@ -12,10 +12,13 @@
 
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { ReactKeycloakProvider } from '@react-keycloak/web';
 import './cowork/styles/tailwind.css';
 import './cowork/styles/globals.css';
 import './styles.css';
 import App from './App';
+import { keycloak, scheduleWebTokenRefresh } from './lib/keycloak';
+import { host } from './platform/host';
 
 (() => {
   let theme: 'light' | 'dark' = 'dark';
@@ -27,8 +30,32 @@ import App from './App';
   document.body.classList.add(theme === 'light' ? 'gf-theme-light' : 'gf-theme-dark');
 })();
 
+const initOptions = { onLoad: 'login-required' as const, pkceMethod: 'S256', checkLoginIframe: false };
+
+const MINDS_ENV = (token: string) => [
+  `ANTON_OPENAI_API_KEY=${token}`,
+  `ANTON_MINDS_API_KEY=${token}`,
+  `ANTON_OPENAI_BASE_URL=https://api.mindshub.ai/v1`,
+].join('\n');
+
+let stopRefresh: (() => void) | null = null;
+
+function handleKeycloakEvent(event: string): void {
+  if (event === 'onAuthSuccess') {
+    stopRefresh?.();
+    stopRefresh = scheduleWebTokenRefresh(async (token) => {
+      await host.saveSettings(MINDS_ENV(token));
+    });
+  } else if (event === 'onAuthLogout' || event === 'onAuthError') {
+    stopRefresh?.();
+    stopRefresh = null;
+  }
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ReactKeycloakProvider authClient={keycloak} initOptions={initOptions} onEvent={handleKeycloakEvent}>
+      <App />
+    </ReactKeycloakProvider>
   </StrictMode>
 );
