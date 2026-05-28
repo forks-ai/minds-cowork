@@ -288,8 +288,8 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
     setErrorMsg('');
     const result = await host.oauthConnect({
       clientId: 'anton-desktop',
-      authUrl: 'https://auth.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/auth',
-      tokenUrl: 'https://auth.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/token',
+      authUrl: 'https://auth.dev.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/auth',
+      tokenUrl: 'https://auth.dev.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/token',
       scopes: ['openid', 'profile', 'email', 'organization', 'offline_access'],
     });
     if (!result.ok) {
@@ -302,7 +302,7 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
     await saveFinal([
       'ANTON_TERMS_CONSENT=true',
       'ANTON_MINDS_ENABLED=true',
-      'ANTON_MINDS_URL=https://api.mindshub.ai',
+      'ANTON_MINDS_URL=https://api.dev.mindshub.ai',
       'ANTON_PLANNING_PROVIDER=openai-compatible',
       'ANTON_CODING_PROVIDER=openai-compatible',
       'ANTON_PLANNING_MODEL=_reason_',
