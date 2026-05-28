@@ -186,6 +186,10 @@ function PathRow({ label, value, copyValue, accent = false, onActivate }) {
           title={`Open ${value}`}
           style={{
             all: 'unset', cursor: 'pointer',
+            // `all: unset` resets display to inline, where text-overflow
+            // ellipsis is a no-op — force a block box so a long URL
+            // truncates instead of overflowing the row.
+            display: 'block',
             minWidth: 0, flex: 1,
             color: accent ? 'var(--accent)' : 'var(--ink-3)',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -203,6 +207,7 @@ function PathRow({ label, value, copyValue, accent = false, onActivate }) {
         >{value}</button>
       ) : (
         <span title={value} style={{
+          display: 'block',
           minWidth: 0, flex: 1,
           color: accent ? 'var(--accent)' : 'var(--ink-3)',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
