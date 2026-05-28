@@ -357,7 +357,7 @@ export async function stopServer(): Promise<void> {
 
 // True once /health has confirmed the python is responsive.
 export function isServerRunning(): boolean {
-  return serverStarted && serverProcess !== null;
+  return serverStarted;
 }
 
 // True between spawn() and the first successful /health probe — i.e.
