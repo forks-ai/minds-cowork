@@ -771,13 +771,24 @@ export async function mountArtifactPreview(path) {
     method: 'POST',
     body: JSON.stringify({ path }),
   });
+  // Prefer the stateless `serveUrl` (origin-relative `/v1/artifacts/
+  // serve/...`) over the token `relUrl`: it's stable, shareable, and
+  // resolves against whatever origin the browser is on — so it works
+  // in the web deployment without publishing to the external host.
+  // `serveUrl` already carries the `/v1` prefix, so combine with
+  // ROOT_BASE (origin), not BASE (origin + /v1). Fall back to the
+  // token URL when serveUrl couldn't be computed server-side.
+  const url = data?.serveUrl
+    ? `${ROOT_BASE}${data.serveUrl}`
+    : (data?.relUrl ? `${BASE}${data.relUrl}` : '');
   return {
     token: data?.token,
     entry: data?.entry,
-    // Absolute URL the iframe can load directly. The server returns a
-    // path without scheme; combine with BASE so the renderer doesn't
-    // need to know the API origin.
-    url: data?.relUrl ? `${BASE}${data.relUrl}` : '',
+    // Absolute URL the iframe can load directly.
+    url,
+    // Origin-relative serve URL on its own, for callers that want to
+    // open the artifact in a new tab (web "open" action).
+    serveUrl: data?.serveUrl ? `${ROOT_BASE}${data.serveUrl}` : '',
     // Server-side sidecar lookup of the artifact's published URL (if
     // any). Forwarded so the viewer shows the "Published" pill even
     // when opened from a chat bubble — those carry no publishedUrl on

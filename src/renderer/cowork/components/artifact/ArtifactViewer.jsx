@@ -464,7 +464,27 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete }) 
       setBusy(false);
     }
   };
+  // Open the local file only when the file is actually on this machine
+  // (Electron + loopback server). When the desktop app points at a
+  // REMOTE server, or in web, the path is on the server box — open the
+  // HTTP `serveUrl` instead (made absolute via the API origin since an
+  // Electron renderer runs from file://, where a relative URL wouldn't
+  // resolve against the remote server).
+  const canOpenLocalFile = host.isElectron && host.isLocalApiOrigin();
   const onOpenOS = async () => {
+    if (!canOpenLocalFile) {
+      const rel = artifact?.serveUrl || '';
+      const url = rel
+        ? (rel.startsWith('http') ? rel : `${host.getApiOrigin()}${rel}`)
+        : (publishedUrl || '');
+      if (url) {
+        try { await host.openExternal(url); }
+        catch { window.open(url, '_blank', 'noreferrer'); }
+        return;
+      }
+      setErr('This artifact is served from a remote server and has no open URL yet.');
+      return;
+    }
     if (!hasActionPath) {
       setErr(disabledReason || 'This artifact does not have a local file path.');
       return;
