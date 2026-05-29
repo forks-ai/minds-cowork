@@ -11,8 +11,8 @@ Run with: uvicorn spa_wrapper:app --host 0.0.0.0 --port 26866
 import os
 from pathlib import Path
 
-from fastapi import HTTPException
-from fastapi.responses import FileResponse
+from fastapi import HTTPException, Request
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from cowork.server import app  # noqa: F401 — re-exported for uvicorn
@@ -52,10 +52,19 @@ if SPA_DIR.exists():
         return FileResponse(str(_spa_shell))
 
     @app.get("/{full_path:path}")
-    async def spa_fallback(full_path: str):
-        # /api/* paths must 404 cleanly — never serve the SPA shell in
-        # place of a missing API endpoint.
+    async def spa_fallback(full_path: str, request: Request):
+        # /api/* paths must never serve the SPA shell in place of a
+        # missing API endpoint. Routes are registered with trailing
+        # slashes (e.g. /api/v1/pins/) but clients often omit them;
+        # Starlette's redirect_slashes would normally 307, but this
+        # catch-all matches first. Redirect to the trailing-slash
+        # variant so the real route can handle it; if it truly doesn't
+        # exist, the next request will 404 from the router itself.
         if full_path.startswith("api/") or full_path == "api":
+            if not full_path.endswith("/"):
+                qs = str(request.url.query)
+                target = f"/{full_path}/" + (f"?{qs}" if qs else "")
+                return RedirectResponse(url=target, status_code=307)
             raise HTTPException(status_code=404)
         # Top-level file the build emitted? Serve it. Otherwise this is
         # a client-side route — serve the SPA shell so the renderer's
