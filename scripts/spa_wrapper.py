@@ -51,15 +51,14 @@ if SPA_DIR.exists():
     async def root():
         return FileResponse(str(_spa_shell))
 
-    @app.get("/{full_path:path}")
+    @app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
     async def spa_fallback(full_path: str, request: Request):
         # /api/* paths must never serve the SPA shell in place of a
         # missing API endpoint. Routes are registered with trailing
         # slashes (e.g. /api/v1/pins/) but clients often omit them;
         # Starlette's redirect_slashes would normally 307, but this
-        # catch-all matches first. Redirect to the trailing-slash
-        # variant so the real route can handle it; if it truly doesn't
-        # exist, the next request will 404 from the router itself.
+        # catch-all matches first. 307 preserves the original HTTP
+        # method so POST/PUT/PATCH/DELETE all work correctly.
         if full_path.startswith("api/") or full_path == "api":
             if not full_path.endswith("/"):
                 qs = str(request.url.query)
