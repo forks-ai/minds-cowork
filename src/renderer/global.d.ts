@@ -53,12 +53,32 @@ interface AntonTronAPI {
     scope?: string;
     token_type?: string;
   }>;
+  oauthCancel: () => Promise<boolean>;
+  mindshubLogin: () => Promise<{
+    ok: boolean;
+    reason?: string;
+    access_token?: string;
+    refresh_token?: string;
+    expires_in?: number;
+  }>;
+  mindshubRefresh: () => Promise<{ ok: boolean; reason?: string; access_token?: string }>;
+  mindshubFinalize: () => Promise<{ ok: boolean; reason?: string; upgradeRequired?: boolean }>;
+  mindshubGetCachedToken: () => Promise<{ access_token: string | null }>;
+  getAccessToken: () => Promise<string | null>;
+  logout: () => Promise<void>;
   getPathForFile: (file: File) => string;
 }
 
 declare global {
   interface Window {
     antontron: AntonTronAPI;
+  }
+
+  namespace React {
+    interface CSSProperties {
+      WebkitAppRegion?: string;
+      WebkitBackdropFilter?: string;
+    }
   }
 }
 

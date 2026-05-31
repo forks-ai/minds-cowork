@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import httpx
 import urllib.error
@@ -102,6 +103,9 @@ RECOMMENDED_PAIR = {
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 MINDS_API_PATH_SUFFIX = "/v1"
+MINDS_BASE_URLS = ("https://api.mindshub.ai", "https://api.dev.mindshub.ai")
+MINDS_OPENAI_BASE_URLS = tuple(f"{base}{MINDS_API_PATH_SUFFIX}" for base in MINDS_BASE_URLS)
+LEGACY_MINDS_MODELS = {"_reason_", "_code_"}
 
 OPENAI_FAMILY = ("openai", "gemini", "openai-compatible", "minds-cloud")
 
@@ -361,6 +365,123 @@ def _empty_provider(ptype: str) -> dict[str, Any]:
     return base
 
 
+_JWT_PART_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _looks_like_jwt(value: str) -> bool:
+    parts = (value or "").strip().split(".")
+    return len(parts) == 3 and all(part and _JWT_PART_RE.fullmatch(part) for part in parts)
+
+
+def _has_any_saved_provider_env() -> bool:
+    return any(
+        _get_env(key)
+        for key in (
+            "ANTON_ANTHROPIC_API_KEY",
+            "ANTON_OPENAI_API_KEY",
+            "ANTON_MINDS_API_KEY",
+            "ANTON_OPENAI_BASE_URL",
+            "ANTON_MINDS_URL",
+        )
+    )
+
+
+def _stale_bootstrap_provider_types(providers: list[dict[str, Any]]) -> set[str]:
+    stale: set[str] = set()
+    for provider in providers:
+        ptype = provider.get("type")
+        api_key = (provider.get("apiKey") or "").strip()
+        if ptype == "minds-cloud" and _looks_like_jwt(api_key):
+            stale.add("minds-cloud")
+            continue
+        if (
+            ptype == "openai-compatible"
+            and _looks_like_jwt(api_key)
+            and (provider.get("baseUrl") or "").rstrip("/") in MINDS_OPENAI_BASE_URLS
+        ):
+            stale.add("openai-compatible")
+    return stale
+
+
+def _cleanup_stale_bootstrap_state(
+    prefs: dict[str, Any],
+    providers: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not _has_any_saved_provider_env():
+        orphaned_types = {
+            provider["type"]
+            for provider in providers
+            if provider.get("type") in PROVIDER_TYPES and provider.get("apiKey")
+        }
+        if orphaned_types:
+            _drop_provider_state(orphaned_types, [])
+            return []
+
+    if _has_any_saved_provider_env():
+        return providers
+
+    stale_types = _stale_bootstrap_provider_types(providers)
+    if not stale_types:
+        return providers
+
+    filtered = [provider for provider in providers if provider.get("type") not in stale_types]
+    _drop_provider_state(stale_types, filtered)
+    return filtered
+
+
+def _drop_provider_state(
+    provider_types: set[str],
+    remaining_providers: list[dict[str, Any]],
+) -> None:
+    """Remove provider preferences that no longer have backing env keys."""
+
+    def _cleanup(state: dict[str, Any]) -> None:
+        pref_state = state.setdefault("preferences", {})
+        if not isinstance(pref_state, dict):
+            return
+
+        if remaining_providers:
+            pref_state["providers"] = [provider for provider in remaining_providers]
+        else:
+            pref_state.pop("providers", None)
+
+        for key in ("providerStatus", "providerStatusDetails"):
+            value = pref_state.get(key)
+            if isinstance(value, dict):
+                pref_state[key] = {
+                    name: status
+                    for name, status in value.items()
+                    if name not in provider_types
+                }
+                if not pref_state[key]:
+                    pref_state.pop(key, None)
+
+        overrides = pref_state.get("modelOverrides")
+        if isinstance(overrides, dict):
+            next_overrides = {}
+            for role, override in overrides.items():
+                if not isinstance(override, dict):
+                    continue
+                if (
+                    override.get("providerType") in provider_types
+                    and override.get("model") in LEGACY_MINDS_MODELS
+                ):
+                    continue
+                next_overrides[role] = override
+            if next_overrides:
+                pref_state["modelOverrides"] = next_overrides
+            else:
+                pref_state.pop("modelOverrides", None)
+            if not next_overrides:
+                pref_state["modelMode"] = "default"
+
+    try:
+        update_state(_cleanup)
+        logger.info("Dropped stale provider state: %s", ", ".join(sorted(provider_types)))
+    except Exception as e:
+        logger.debug("Could not persist stale provider cleanup: %s", e)
+
+
 def _providers_from_env() -> list[dict[str, Any]]:
     """Migration: read the legacy single-provider env state and return a
     providers list (zero or one entries). Called when state.preferences
@@ -529,6 +650,7 @@ def _load_providers() -> list[dict[str, Any]]:
     if isinstance(raw, list) and raw:
         normalized = [_normalize_provider(p) for p in raw]
         cleaned = [p for p in normalized if p is not None]
+        cleaned = _cleanup_stale_bootstrap_state(prefs, cleaned)
         if cleaned:
             return _apply_default_invariant(_dedupe_by_type(cleaned))
     migrated = _providers_from_env()
@@ -564,15 +686,33 @@ def _load_providers() -> list[dict[str, Any]]:
     return migrated
 
 
+def _provider_configured(p: dict[str, Any]) -> bool:
+    """A provider is usable once it carries the credential it needs: an
+    API key for the hosted providers, or a base URL for an
+    OpenAI-compatible endpoint (key optional there). Mirrors
+    _ping_provider's missing-credential checks."""
+    if p.get("type") == "openai-compatible":
+        return bool((p.get("baseUrl") or "").strip())
+    return bool((p.get("apiKey") or "").strip())
+
+
 def _default_provider(providers: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
-    """MindsHub is the implicit fallback for any role that hasn't been
-    explicitly assigned — it's the only provider users can't delete,
-    so it's also the only one we can safely depend on. Falls back to
-    the first registered provider if MindsHub is somehow missing."""
+    """The provider that drives any role without an explicit override.
+    Prefer MindsHub (the permanent, recommended baseline) when it's
+    actually configured; otherwise fall back to the first provider that
+    carries a usable credential, so adding e.g. an Anthropic key "just
+    works" in default mode. When nothing is configured, fall back to
+    MindsHub (or the first registered entry) so callers still get a
+    stable target to surface as the unconfigured default."""
+    if not providers:
+        return None
     minds = next((p for p in providers if p["type"] == "minds-cloud"), None)
-    if minds:
+    if minds and _provider_configured(minds):
         return minds
-    return providers[0] if providers else None
+    configured = next((p for p in providers if _provider_configured(p)), None)
+    if configured:
+        return configured
+    return minds or providers[0]
 
 
 def _provider_by_type(providers: list[dict[str, Any]], ptype: Optional[str]) -> Optional[dict[str, Any]]:
@@ -1047,6 +1187,56 @@ def _evict_chat_sessions() -> None:
         cm._live.clear()
     except Exception as e:
         logger.debug("Could not evict chat sessions after settings save: %s", e)
+
+
+# LLM/auth credentials that must NOT survive a logout into the next
+# user's session. The renderer clears these from ~/.anton/.env before
+# calling runtime-reset, but the Python process loaded them into
+# os.environ at startup — and `_get_env` reads os.environ FIRST, so a
+# stale value here keeps `config_ready` reporting True for a freshly
+# signed-in free user who has no key. That stale-True is exactly what
+# let the next user send a message and run a turn against the previous
+# user's credentials before the provider-required card appeared.
+# Dropping them here makes get_config_status() fall through to the
+# (now-empty) .env and correctly report config_ready=False.
+_LOGOUT_ENV_KEYS = (
+    "ANTON_MINDS_API_KEY",
+    "ANTON_MINDS_URL",
+    "ANTON_MINDS_ENABLED",
+    "ANTON_OPENAI_API_KEY",
+    "ANTON_OPENAI_BASE_URL",
+    "ANTON_ANTHROPIC_API_KEY",
+    "ANTON_PLANNING_PROVIDER",
+    "ANTON_CODING_PROVIDER",
+    "ANTON_PLANNING_MODEL",
+    "ANTON_CODING_MODEL",
+)
+
+
+@router.post("/runtime-reset")
+async def runtime_reset():
+    """Drop in-memory runtimes + stale credentials after logout.
+
+    Logout should not stop the whole Python server, but it must not let
+    old paid chat sessions, scratchpads, OR credentials survive into the
+    next user. Clearing the live pools forces the next request to rebuild
+    against the current ~/.anton/.env; clearing the credential env keys
+    forces get_config_status() to re-derive readiness from the (now
+    cleared) .env instead of the stale values still cached in os.environ.
+    Without the env clear, a free user signing in right after a paid user
+    would see config_ready=True and be able to start a turn against the
+    previous user's key before the provider-required card showed.
+    """
+    for key in _LOGOUT_ENV_KEYS:
+        os.environ.pop(key, None)
+    try:
+        from server.anton_api import conversation_manager, scratchpad_runtime
+
+        await conversation_manager.close_all()
+        await scratchpad_runtime.close_all()
+    except Exception as e:
+        logger.debug("Could not reset live runtimes: %s", e)
+    return {"status": "ok"}
 
 
 async def _ping_provider(p: dict[str, Any]) -> tuple[str, str]:
