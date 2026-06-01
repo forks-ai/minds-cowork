@@ -1646,6 +1646,10 @@ async def google_ads_oauth_callback(
 
         developer_token = str(pending.get("developerToken", "")).strip()
         login_customer_id = str(pending.get("loginCustomerId", "")).strip()
+
+        if not developer_token:
+            raise HTTPException(status_code=400, detail="developer_token is required")
+
         vault_entry = {
             "auth_type": "oauth",
             "access_token": access_token,
