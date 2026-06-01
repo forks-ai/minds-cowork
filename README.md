@@ -866,3 +866,4 @@ xattr -cr "/Applications/Minds Cowork.app"
 ---
 
 _Built by MindsDB. Anton is the autonomous AI coworker._
+ 
