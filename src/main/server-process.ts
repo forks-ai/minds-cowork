@@ -71,7 +71,7 @@ function getUvPath(): string | null {
 }
 
 // Build a PATH with ~/.local/bin and ~/.cargo/bin prepended. Critical
-// for macOS (and to a lesser extent Linux) GUI launches: when Anton.app
+// for macOS (and to a lesser extent Linux) GUI launches: when Minds Cowork.app
 // starts from Finder/Dock, process.env.PATH is the minimal launchd PATH
 // (`/usr/bin:/bin:/usr/sbin:/sbin`) — shell init files aren't read,
 // so `~/.local/bin` (where the installer puts `uv`) is missing.

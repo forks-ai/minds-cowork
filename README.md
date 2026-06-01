@@ -391,10 +391,10 @@ npm run dist:mac
 
 ```bash
 # Check if app is signed
-codesign -dv --verbose=4 "release/mac-universal/Anton.app"
+codesign -dv --verbose=4 "release/mac-universal/Minds Cowork.app"
 
 # Check notarization status
-xcrun stapler validate "release/Anton-0.1.0-universal.dmg"
+xcrun stapler validate "release/Minds Cowork-0.1.0-universal.dmg"
 
 # If "Developer ID" identity not found, open Keychain Access
 # and verify the certificate is in "login" keychain, not expired
@@ -847,7 +847,7 @@ The packaged `.app` doesn't inherit shell PATH. The sidecar is spawned via the `
 
 ```bash
 # Remove quarantine attribute (dev only)
-xattr -cr "/Applications/Anton.app"
+xattr -cr "/Applications/Minds Cowork.app"
 ```
 
 ---
