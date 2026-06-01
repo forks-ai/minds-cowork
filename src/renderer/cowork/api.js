@@ -896,8 +896,8 @@ export async function startGmailAuth() {
   return req('/integrations/gmail/oauth/start', { method: 'POST', body: JSON.stringify({}) });
 }
 
-export async function startGoogleAdsAuth() {
-  return req('/integrations/google-ads/oauth/start', { method: 'POST', body: JSON.stringify({}) });
+export async function startGoogleAdsAuth(params = {}) {
+  return req('/integrations/google-ads/oauth/start', { method: 'POST', body: JSON.stringify(params) });
 }
 
 export async function startGoogleAnalyticsAuth() {
