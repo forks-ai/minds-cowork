@@ -147,7 +147,7 @@ export function PhaseProgress({ steps = [], streamStatus = null, conversationId 
   if (!isInFlight && !isDone && steps.length === 0) {
     return (
       <p className="px-1 py-2 text-[12.5px] text-ink-4">
-        Steps appear here while Anton works.
+        Steps appear here while the agent works.
       </p>
     );
   }

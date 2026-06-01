@@ -214,8 +214,8 @@ function EmptyState({ onConnectNew }) {
         fontFamily: FONT_BODY, fontSize: 13.5, color: 'var(--ink-3)',
         maxWidth: 380, textAlign: 'center', lineHeight: 1.5,
       }}>
-        Connectors shape how Anton works with you. Hook up the apps and
-        databases you already use, and Anton will automate work there.
+        Connectors shape how {agentLabel} works with you. Hook up the apps and
+        databases you already use, and {agentLabel} will automate work there.
       </div>
       <ConnectButton onClick={onConnectNew} large />
     </div>
@@ -503,6 +503,7 @@ export default function CustomizeView({
   onReconnect,
   /** Called with the fresh connections array so App can update the sidebar badge + composer list. */
   onConnectionsSynced,
+  agentLabel = 'the agent',
 }) {
   const [list, setList] = useState(Array.isArray(initialConnectors) ? initialConnectors : []);
   const [search, setSearch] = useState('');
@@ -646,7 +647,7 @@ export default function CustomizeView({
     }}>
       <PageHeader
         title="Connect Apps and Data"
-        subtitle="Connect Anton to the tools you already use, and automate work there."
+        subtitle={`Connect ${agentLabel} to the tools you already use, and automate work there.`}
         actions={<ConnectButton onClick={handleConnectNew} />}
       />
 

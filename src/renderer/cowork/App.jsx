@@ -24,6 +24,7 @@ import ConnectorPicker from './components/connector/ConnectorPicker';
 import ServerOfflineHelpModal from './components/ServerOfflineHelpModal';
 import { setForm as setDataVaultForm, getFormState as getDataVaultFormState } from './components/datavault/formStore';
 import { host } from '../platform/host';
+import { getAgentLabel } from './lib/agentLabel';
 import { useBreakpoint } from './hooks/useBreakpoint';
 import { fetchSessions, fetchSession, fetchProjects, fetchArtifacts, fetchSettings, fetchHealth,
          createProject, updateSettings, streamNewSession, streamMessage,
@@ -336,7 +337,7 @@ function humanizeToken(value) {
     .trim();
 }
 
-function describeActivity(event) {
+function describeActivity(event, agentName = 'Anton') {
   if (event?.type === 'tool_result') {
     const action = humanizeToken(event.action || 'used');
     const name = humanizeToken(event.name || 'tool');
@@ -352,7 +353,7 @@ function describeActivity(event) {
   if (normalizedPhase === 'reasoning done') return 'Finished reasoning';
   if (normalizedPhase === 'context') return 'Updated context';
 
-  return phase ? `Anton is ${phase}` : 'Anton is working';
+  return phase ? `${agentName} is ${phase}` : `${agentName} is working`;
 }
 
 // ─── Per-turn step persistence ───────────────────────────────────────────
@@ -609,6 +610,8 @@ function AppCore() {
     showCounters: true,
     accentVariant: 'aqua',
   });
+
+  const agentLabel = getAgentLabel(settings);
 
   const [tasks, setTasks] = useState([]);
   // IDs of tasks deleted this session. Used to filter them out of
@@ -1094,8 +1097,8 @@ function AppCore() {
         const m = MOCK_DATA.models.find((x) => x.id === modelId);
         setSelectedModel(m || {
           id: modelId,
-          name: modelId || 'Anton model',
-          desc: data.providerLabel ? `${data.providerLabel} planning model` : 'Configured Anton planning model',
+          name: modelId || 'Planning model',
+          desc: data.providerLabel ? `${data.providerLabel} planning model` : 'Configured planning model',
         });
       }
     });
@@ -1342,7 +1345,7 @@ function AppCore() {
       setSettings((prev) => ({ ...prev, ...latest }));
       const modelId = latest.defaultModel || latest.planningModel;
       const m = MOCK_DATA.models.find((x) => x.id === modelId);
-      setSelectedModel(m || { id: modelId, name: modelId || 'Anton model', desc: 'Configured Anton planning model' });
+      setSelectedModel(m || { id: modelId, name: modelId || 'Planning model', desc: 'Configured planning model' });
     }
     return result;
   }, [settings]);
@@ -1370,7 +1373,7 @@ function AppCore() {
     return selectedProject;
   })();
   const currentTaskModel = currentTask?.model
-    ? (models.find((m) => m.id === currentTask.model) || { id: currentTask.model, name: currentTask.model, desc: 'Configured Anton model' })
+    ? (models.find((m) => m.id === currentTask.model) || { id: currentTask.model, name: currentTask.model, desc: 'Configured planning model' })
     : selectedModel;
 
   useEffect(() => {
@@ -1488,7 +1491,7 @@ function AppCore() {
         setTasks((prev) => prev.map((t) => {
           if (t.id !== taskId) return t;
           const msgs = markActivityDone(removeThinkingPlaceholder(stripStreaming(t.messages)));
-          return { ...t, status: 'error', messages: [...msgs, { role: 'error', content: message || 'Anton could not complete this task.', code: event?.code }] };
+          return { ...t, status: 'error', messages: [...msgs, { role: 'error', content: message || `${agentLabel} could not complete this task.`, code: event?.code }] };
         }));
       },
     });
@@ -2245,7 +2248,7 @@ function AppCore() {
         setTasks((prev) => prev.map((t) => {
           if (t.id !== resolvedId && t.id !== taskId) return t;
           const msgs = markActivityDone(removeThinkingPlaceholder(stripStreaming(t.messages)));
-          return { ...t, status: 'error', messages: [...msgs, { role: 'error', content: message || 'Anton could not complete this task.', code: event?.code }] };
+          return { ...t, status: 'error', messages: [...msgs, { role: 'error', content: message || `${agentLabel} could not complete this task.`, code: event?.code }] };
         }));
         fetchHealth().then((h) => setHealth(h));
       },
@@ -2459,7 +2462,7 @@ function AppCore() {
         setTasks((prev) => prev.map((t) => {
           if (t.id !== id && t.id !== resolvedId) return t;
           const msgs = markActivityDone(removeThinkingPlaceholder(stripStreaming(t.messages)));
-          return { ...t, status: 'error', messages: [...msgs, { role: 'error', content: message || 'Anton could not complete this task.', code: event?.code }] };
+          return { ...t, status: 'error', messages: [...msgs, { role: 'error', content: message || `${agentLabel} could not complete this task.`, code: event?.code }] };
         }));
         fetchHealth().then((h) => setHealth(h));
         // Same drain on error so a failed turn doesn't strand the
@@ -2972,6 +2975,7 @@ function AppCore() {
           activeRoute={route === 'task' ? null : (route === 'schedule-detail' ? 'scheduled' : route)}
           activeTaskId={activeTaskId}
           serverOnline={serverOnline}
+          agentLabel={agentLabel}
           onNavigate={navigate}
           onSelectTask={selectTask}
           onNewTask={newTask}
@@ -3069,6 +3073,7 @@ function AppCore() {
             configError={health.config_error ?? settings.configError}
             onOpenSettings={() => setRoute('settings')}
             serverOnline={serverOnline}
+            agentLabel={agentLabel}
             onShowServerHelp={() => setServerHelpOpen(true)}
             skipIntro={bootIntroDone}
           />
@@ -3118,6 +3123,7 @@ function AppCore() {
             }}
             projects={projects}
             sidebarCollapsed={isNarrow || sidebarCollapsedEffective}
+            agentLabel={agentLabel}
           />
         )}
 
@@ -3152,6 +3158,7 @@ function AppCore() {
               setSelectedScheduleId(task.id);
               setRoute('schedule-detail');
             }}
+            agentLabel={agentLabel}
           />
         )}
 
@@ -3176,6 +3183,7 @@ function AppCore() {
               if (p) setSelectedProject(p);
               setRoute('projects');
             }}
+            agentLabel={agentLabel}
           />
         )}
 
@@ -3184,6 +3192,7 @@ function AppCore() {
             task={scheduled.find((s) => s.id === selectedScheduleId) || null}
             projects={projects}
             models={modelOptions}
+            agentLabel={agentLabel}
             onBack={() => { setSelectedScheduleId(null); setRoute('scheduled'); }}
             onUpdate={handleUpdateSchedule}
             onDelete={async (id) => {
@@ -3221,6 +3230,7 @@ function AppCore() {
           <ArtifactsView
             artifacts={artifacts}
             projects={projects}
+            agentLabel={agentLabel}
             onOpenProject={(p) => {
               // Pin the project so ProjectsView opens directly in detail
               // (its `selectedProject` effect mirrors that into local
@@ -3251,7 +3261,7 @@ function AppCore() {
         )}
 
         {route === 'dispatch' && (
-          <DispatchView onSetUpLater={() => setRoute('home')} />
+          <DispatchView onSetUpLater={() => setRoute('home')} agentLabel={agentLabel} />
         )}
 
         {route === 'customize' && (
@@ -3262,11 +3272,12 @@ function AppCore() {
             onOpenSettings={() => setRoute('settings')}
             onConnectNew={handleStartConnectChat}
             onReconnect={(spec) => handleConnectorPicked(spec)}
+            agentLabel={agentLabel}
           />
         )}
 
         {route === 'settings' && (
-          <SettingsView settings={settings} setSetting={setSetting} onSave={saveSettings} theme={theme} onThemeChange={setTheme} />
+          <SettingsView settings={settings} setSetting={setSetting} onSave={saveSettings} theme={theme} onThemeChange={setTheme} agentLabel={agentLabel} />
         )}
 
         {/* Legacy 'connect' kind removed — Connect Apps and Data is now
@@ -3278,6 +3289,7 @@ function AppCore() {
             kind={route}
             project={selectedProject}
             onRefreshArtifacts={() => fetchArtifacts().then((data) => { if (Array.isArray(data)) setArtifacts(data); })}
+            agentLabel={agentLabel}
           />
         )}
       </main>
@@ -3355,6 +3367,7 @@ function AppCore() {
         serverOnline={serverOnline}
         serverBusy={serverBusy}
         serverBusyKind={serverBusyKind}
+        agentLabel={agentLabel}
         onStart={async () => {
           // Atomic start — used by both the offline "Start" button
           // and the composed "Restart" path inside the modal.
@@ -3416,7 +3429,7 @@ function AppCore() {
       <ConfirmModal
         open={pendingDeleteTurn != null}
         title="Delete this exchange?"
-        message="This removes both your question and Anton's response from the conversation. Any scratchpad cells, artifacts, or memory writes anton produced as part of this turn stay on disk. This can't be undone."
+        message={`This removes both your question and ${agentLabel}'s response from the conversation. Any scratchpad cells, artifacts, or memory writes produced as part of this turn stay on disk. This can't be undone.`}
         confirmLabel="Delete"
         cancelLabel="Keep"
         destructive

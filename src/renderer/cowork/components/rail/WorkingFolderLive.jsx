@@ -335,7 +335,7 @@ export function WorkingFolderLive({ project, isStreaming }) {
       )}
       {rows.length === 0 ? (
         <p className="text-[12.5px] text-ink-4 px-1 pb-1">
-          No artifacts yet — Anton will save dashboards, reports, and
+          No artifacts yet — the agent will save dashboards, reports, and
           datasets here as it produces them.
         </p>
       ) : (

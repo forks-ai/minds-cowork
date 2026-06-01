@@ -332,7 +332,7 @@ function _streamResponse(text, { conversationId, projectName, projectPath, model
               onDone?.(cid);
               return;
             case 'response.failed':
-              onError?.(msg.error || msg.message || 'Anton failed', { ...msg, code: msg.code });
+              onError?.(msg.error || msg.message || 'The agent failed', { ...msg, code: msg.code });
               return;
             default:
               break;
@@ -453,7 +453,7 @@ export function tailInFlight(conversationId, {
               onDone?.(cid);
               return;
             case 'response.failed':
-              onError?.(msg.error || msg.message || 'Anton failed', { ...msg, code: msg.code });
+              onError?.(msg.error || msg.message || 'The agent failed', { ...msg, code: msg.code });
               return;
             default:
               break;
@@ -1013,7 +1013,7 @@ export async function fetchSettings() {
     _lastFetchedSettings = result;
     return result;
   } catch {
-    return { ...MOCK_DATA.settings, configReady: false, configError: 'Anton backend is offline.' };
+    return { ...MOCK_DATA.settings, configReady: false, configError: 'Backend is offline.' };
   }
 }
 

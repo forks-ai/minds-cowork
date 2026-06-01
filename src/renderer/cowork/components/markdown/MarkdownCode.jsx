@@ -105,13 +105,13 @@ export function MarkdownCode(props) {
       setForm(conversationId, {
         form_id: 'fm_parse_error',
         title: 'Form did not parse',
-        subtitle: 'Anton sent a form spec that wasn’t valid JSON.',
+        subtitle: "The agent sent a form spec that was not valid JSON.",
         logo: 'database',
         logo_color: 'var(--danger)',
         fields: [],
         form_error: parseError,
         actions: [
-          { id: 'retry', label: 'Ask Anton to retry', kind: 'primary' },
+          { id: 'retry', label: 'Ask the agent to retry', kind: 'primary' },
           { id: 'dismiss', label: 'Dismiss', kind: 'cancel' },
         ],
         // Carry the raw text so the panel can offer a "show raw" peek.
@@ -169,7 +169,7 @@ export function MarkdownCode(props) {
             </span>
           )}
           <span style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>
-            Use the side panel to ask Anton to retry.
+            Use the side panel to ask the agent to retry.
           </span>
         </div>
       );

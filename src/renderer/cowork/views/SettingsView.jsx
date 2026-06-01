@@ -677,7 +677,7 @@ function CredentialRow({ title, subtitle, status, hasValue, children }) {
   );
 }
 
-export default function SettingsView({ settings, setSetting, onSave, theme, onThemeChange }) {
+export default function SettingsView({ settings, setSetting, onSave, theme, onThemeChange, agentLabel }) {
   const [saved, setSaved] = useState(false);
   const [validation, setValidation] = useState(null);
   const [testing, setTesting] = useState(false);
@@ -933,7 +933,7 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
           <div style={{ maxWidth: 820 }}>
             <h1 className="page-title" style={{ marginTop: 0, marginBottom: 6 }}>Settings</h1>
             <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 22 }}>
-              Anton configuration and local desktop preferences.
+              {`${agentLabel || 'Anton'} configuration and local desktop preferences.`}
             </div>
 
             {/* Status banner — only shown after Save or Test. While
@@ -963,10 +963,10 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
               const title = testing
                 ? 'Testing configuration…'
                 : anyActiveFail
-                  ? 'Anton needs a valid LLM provider and API key to work'
+                  ? `${agentLabel || 'Anton'} needs a valid LLM provider and API key to work`
                   : tested
-                    ? (effectiveReady ? 'Anton setup correctly' : 'Test failed')
-                    : effectiveReady ? 'Anton setup correctly' : 'Anton needs configuration';
+                    ? (effectiveReady ? `${agentLabel || 'Anton'} setup correctly` : 'Test failed')
+                    : effectiveReady ? `${agentLabel || 'Anton'} setup correctly` : `${agentLabel || 'Anton'} needs configuration`;
               const subtitle = testing
                 ? 'Talking to the active provider — hold on.'
                 : anyActiveFail
@@ -1305,7 +1305,7 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
             </CollapsibleGroup>
 
             <CollapsibleGroup title="Agent">
-              <Section title="Harness" subtitle="Which AI agent powers your tasks. Anton is the default; Hermes is an alternative agent with its own tool and memory system.">
+              <Section title="Harness" subtitle={`Which AI agent powers your tasks. ${agentLabel || 'Anton'} is the default; Hermes is an alternative agent with its own tool and memory system.`}>
                 <Segmented
                   value={settings.harness || 'anton'}
                   onChange={(v) => { setSetting('harness', v); setLlmDirty(true); }}
@@ -1638,7 +1638,7 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
                     </CredentialRow>
                     <CredentialRow
                       title="Minds URL"
-                      subtitle="Base URL for Minds-backed Anton features."
+                      subtitle="Base URL for Minds-backed Minds Cowork features."
                       status={relevance.mindsUrl}
                       hasValue={has('mindsUrl')}
                     >
@@ -1685,14 +1685,14 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
             })()}
 
             <CollapsibleGroup title="Memory" defaultOpen={false}>
-              <Section title="Memory mode" subtitle="How Anton updates its long-term memory.">
+              <Section title="Memory mode" subtitle={`How ${agentLabel || 'Anton'} updates its long-term memory.`}>
                 <Segmented
                   value={settings.memoryMode ?? 'autopilot'}
                   onChange={(v) => setSetting('memoryMode', v)}
                   groupLabel="Memory mode"
                   options={[
-                    { value: 'autopilot', label: 'Autopilot', title: 'Anton updates long-term memory automatically.' },
-                    { value: 'copilot',   label: 'Copilot',   title: 'Anton suggests memory updates for you to confirm.' },
+                    { value: 'autopilot', label: 'Autopilot', title: `${agentLabel || 'Anton'} updates long-term memory automatically.` },
+                    { value: 'copilot',   label: 'Copilot',   title: `${agentLabel || 'Anton'} suggests memory updates for you to confirm.` },
                     { value: 'off',       label: 'Off',       title: 'Disable long-term memory updates.' },
                   ]}
                 />
@@ -1701,7 +1701,7 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
                 <Toggle
                   value={settings.episodicMemory ?? true}
                   onChange={(v) => setSetting('episodicMemory', v)}
-                  title="Save conversation history so Anton can recall past tasks."
+                  title={`Save conversation history so ${agentLabel || 'Anton'} can recall past tasks.`}
                   ariaLabel="Episodic memory"
                 />
               </Section>

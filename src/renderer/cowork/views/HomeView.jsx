@@ -251,6 +251,7 @@ export default function HomeView({
   configReady, configError, onOpenSettings,
   serverOnline = false, onShowServerHelp,
   skipIntro = false,
+  agentLabel,
 }) {
   useEffect(() => { _ensureBootKeyframes(); }, []);
 
@@ -508,8 +509,8 @@ export default function HomeView({
                 background: 'var(--primary-50)', color: 'var(--primary-700)', flexShrink: 0,
               }}>{Ico.key(18)}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 14, fontWeight: 650, color: 'var(--text-strong)' }}>Configure Anton before starting</div>
-                <div style={{ fontSize: 12.5, color: 'var(--frost-700)', marginTop: 3 }}>{configError || 'Anton needs a provider and API key before it can answer.'}</div>
+                <div style={{ fontSize: 14, fontWeight: 650, color: 'var(--text-strong)' }}>Configure {agentLabel || 'Anton'} before starting</div>
+                <div style={{ fontSize: 12.5, color: 'var(--frost-700)', marginTop: 3 }}>{configError || `${agentLabel || 'Anton'} needs a provider and API key before it can answer.`}</div>
               </div>
               <button className="btn-primary" onClick={onOpenSettings}>Settings</button>
             </div>

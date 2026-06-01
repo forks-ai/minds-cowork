@@ -319,7 +319,7 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
               form_id: spec.form_id,
               _is_success: true,
               title: `${saved.label || connectorId} connected`,
-              subtitle: 'Saved to Anton\'s data vault. Anton can use this connection in tasks.',
+              subtitle: 'Saved to the data vault. The agent can use this connection in tasks.',
             });
             // Surface a one-line confirmation in the chat too.
             onContinue?.({
@@ -643,7 +643,7 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
                       form_id: spec.form_id,
                       _is_success: true,
                       title: successTitle,
-                      subtitle: "Saved to Anton's data vault. Anton can now use this connection in tasks.",
+                      subtitle: "Saved to the data vault. The agent can now use this connection in tasks.",
                     });
                   }
                 } catch { /* keep polling */ }

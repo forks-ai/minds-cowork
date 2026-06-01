@@ -186,7 +186,7 @@ export default function App() {
       {page === 'launching' && (
         <div className="launch-screen">
           <pre className="logo-ascii">{LOGO}</pre>
-          <div className="launch-text">Starting Anton...</div>
+          <div className="launch-text">Starting Minds Cowork...</div>
           <div className="launch-bar">
             <div className="launch-bar-fill" />
           </div>
