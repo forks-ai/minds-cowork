@@ -1538,6 +1538,9 @@ async def start_google_ads_oauth(body: dict = None):
     developer_token = str(body.get("developer_token", "")).strip()
     login_customer_id = str(body.get("login_customer_id", "")).strip()
 
+    if not developer_token:
+        raise HTTPException(status_code=400, detail="developer_token is required")
+
     verifier = _pkce_verifier()
     challenge = _pkce_challenge(verifier)
     started_at = _iso_now()
