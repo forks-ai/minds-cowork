@@ -23,11 +23,11 @@ const COWORK_SERVER_VERSION = '0.1.0';
 
 // Package source for cowork-server. Override with COWORK_SERVER_PACKAGE
 // env var (e.g. a local path or alternative git URL during development).
-// When using the default git source, the version pin is appended as a
-// git tag (e.g. @v0.1.0). When publishing to PyPI, change the default
-// to just 'cowork-server' and the version pin becomes ==0.1.0.
 const COWORK_SERVER_PACKAGE = process.env.COWORK_SERVER_PACKAGE
-  || `git+https://github.com/mindsdb/cowork-server.git@v${COWORK_SERVER_VERSION}`;
+  || `cowork-server==${COWORK_SERVER_VERSION}`;
+
+// hermes-agent is not on PyPI, so we inject it via --with from git.
+const HERMES_AGENT_PACKAGE = 'hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git';
 
 function getSteps(): InstallStep[] {
   const steps: InstallStep[] = [];
@@ -407,6 +407,7 @@ export async function runInstaller(win: BrowserWindow, opts?: InstallerOptions):
     const installArgs = [
       'tool', 'install',
       COWORK_SERVER_PACKAGE,
+      '--with', HERMES_AGENT_PACKAGE,
       '--force', '--reinstall',
     ];
 
