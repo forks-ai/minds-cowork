@@ -1,16 +1,8 @@
 # Cowork web image — cowork-server backend + cowork SPA on the same port.
 #
-# Two invocations from one Dockerfile:
-#
-#   Dev (local sibling source — fastest iteration, no GitHub auth needed):
-#     cd antonworld/        # parent dir, so cowork-server/ is in build context
+# Build:
 #     docker build -f cowork/Dockerfile -t cowork:dev \
-#       --build-arg COWORK_SERVER_SOURCE=local .
-#
-#   Prod (pinned cowork-server version from GitHub):
-#     docker build -f cowork/Dockerfile -t ghcr.io/mindsdb/cowork:1.2.3 \
-#       --build-arg COWORK_SERVER_SOURCE=git \
-#       --build-arg COWORK_SERVER_VERSION=v0.1.0 .
+#       --build-arg COWORK_SERVER_VERSION=0.1.1 .
 #
 # Run:
 #     docker run -p 26866:26866 \
@@ -21,20 +13,14 @@
 # Then browse to http://localhost:26866 — the SPA wrapper serves
 # both the cowork SPA (at /) and the API (at /api/v1/*) on the same port.
 #
-# Image is split into four build stages so the runtime layer ships only
+# Image is split into three build stages so the runtime layer ships only
 # what's needed to serve traffic:
 #
-#   spa-builder              Node + npm — builds the renderer; produces /build/dist/
-#   cowork-server-source     scratch    — picks local sibling vs empty (git mode)
-#   py-builder               Python +
-#                            uv + git   — installs cowork-server into /opt/venv
-#   runtime                  Python     — copies /opt/venv + SPA + wrapper.
-#                                         NO git, NO source tree.
+#   spa-builder   Node + npm — builds the renderer; produces /build/dist/
+#   py-builder    Python + uv — installs cowork-server from PyPI into /opt/venv
+#   runtime       Python — copies /opt/venv + SPA + wrapper.
 
-# Global ARGs — must appear before the first FROM so the
-# FROM cowork-server-source-${COWORK_SERVER_SOURCE} substitution resolves.
-ARG COWORK_SERVER_SOURCE=git
-ARG COWORK_SERVER_VERSION=main
+ARG COWORK_SERVER_VERSION=0.1.1
 
 # ── Stage 1: build the cowork SPA ────────────────────────────────────────
 FROM node:22-slim AS spa-builder
@@ -48,47 +34,27 @@ COPY cowork/ ./
 RUN npm run build:web
 # Output lives at /build/dist/renderer-web/
 
-# ── Stage 2a: cowork-server source = local sibling ───────────────────────
-# Used when COWORK_SERVER_SOURCE=local. Build context must be the parent
-# directory (e.g. antonworld/) so cowork-server/ is visible.
-FROM scratch AS cowork-server-source-local
-COPY cowork-server/ /
-
-FROM scratch AS cowork-server-source-git
-# Empty: git mode clones inside py-builder.
-
-# Pick the source stage based on COWORK_SERVER_SOURCE (declared at file top).
-FROM cowork-server-source-${COWORK_SERVER_SOURCE} AS cowork-server-source
-
-# ── Stage 3: install Python deps into an isolated venv ────────────────────
-# This stage carries git because cowork-server's lock file includes git
-# dependencies (anton, hermes-agent). Neither git nor uv reach the
-# runtime image — only /opt/venv is copied forward.
+# ── Stage 2: install Python deps into an isolated venv ─────────────────
+# Dependencies (anton-agent, cowork-server) are pulled from PyPI — no
+# git needed. Only /opt/venv is copied to the runtime image.
 FROM python:3.12-slim AS py-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
-        git \
     && rm -rf /var/lib/apt/lists/*
 
-# uv for fast, reproducible installs from the lock file.
+# uv for fast installs.
 COPY --from=ghcr.io/astral-sh/uv:0.7 /uv /usr/local/bin/uv
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
-# Copy local source (no-op when COWORK_SERVER_SOURCE=git — the scratch
-# stage is empty so this just creates /build/cowork-server/).
-COPY --from=cowork-server-source / /build/cowork-server/
-
 COPY cowork/scripts/install-cowork-server.sh /tmp/install-cowork-server.sh
-ARG COWORK_SERVER_SOURCE
 ARG COWORK_SERVER_VERSION
-ENV COWORK_SERVER_SOURCE=${COWORK_SERVER_SOURCE} \
-    COWORK_SERVER_VERSION=${COWORK_SERVER_VERSION}
+ENV COWORK_SERVER_VERSION=${COWORK_SERVER_VERSION}
 RUN chmod +x /tmp/install-cowork-server.sh && /tmp/install-cowork-server.sh
 
-# ── Stage 4: runtime — minimal, no compilers, no git, no source tree ─────
+# ── Stage 3: runtime — minimal, no compilers, no git, no source tree ─────
 FROM python:3.12-slim AS runtime
 
 # OCI labels — visible in registry UI; helps operators match image to commit.
@@ -96,8 +62,7 @@ LABEL org.opencontainers.image.title="cowork"
 LABEL org.opencontainers.image.source="https://github.com/mindsdb/cowork"
 LABEL org.opencontainers.image.description="Anton Cowork — FastAPI + SPA"
 
-# ca-certificates is the only runtime apt dep. git and uv live
-# only in py-builder; dropping them here keeps the runtime CVE surface small.
+# ca-certificates is the only runtime apt dep.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
