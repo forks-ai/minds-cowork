@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { host } from '../platform/host';
+import { BASE } from '../cowork/api';
 import OrbitMorph from '../cowork/components/ui/OrbitMorph';
 
 type Provider = 'minds' | 'byok';
@@ -29,6 +30,49 @@ const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai
 const MINDS_REGISTER_URL = 'https://auth.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/registrations?client_id=public-client&response_type=code&scope=openid&redirect_uri=https%3A%2F%2Fconsole.mindshub.ai';
 
 const CUSTOM_MODEL = '__custom__';
+
+// Env-var names (ANTON_FOO_BAR) → backend setting keys (foo_bar).
+const ENV_TO_SETTING: Record<string, string> = {
+  ANTON_ANTHROPIC_API_KEY: 'anthropic_api_key',
+  ANTON_OPENAI_API_KEY: 'openai_api_key',
+  ANTON_OPENAI_BASE_URL: 'openai_base_url',
+  ANTON_MINDS_API_KEY: 'minds_api_key',
+  ANTON_MINDS_URL: 'minds_url',
+  ANTON_PLANNING_PROVIDER: 'planning_provider',
+  ANTON_CODING_PROVIDER: 'coding_provider',
+  ANTON_PLANNING_MODEL: 'planning_model',
+  ANTON_CODING_MODEL: 'coding_model',
+  ANTON_MEMORY_MODE: 'memory_mode',
+  ANTON_EPISODIC_MEMORY: 'episodic_memory',
+};
+
+/** Push onboarding settings to the cowork-server backend DB. */
+async function syncToBackend(lines: string[]): Promise<void> {
+  for (const line of lines) {
+    const eq = line.indexOf('=');
+    if (eq <= 0) continue;
+    const envKey = line.slice(0, eq);
+    let value = line.slice(eq + 1);
+    const settingKey = ENV_TO_SETTING[envKey];
+    if (!settingKey) continue;
+    // The backend Provider enum uses underscores (openai_compatible),
+    // but the .env / onboarding uses hyphens (openai-compatible).
+    if (settingKey.endsWith('_provider')) {
+      value = value.replace(/-/g, '_');
+    }
+    try {
+      await fetch(`${BASE}/settings/${encodeURIComponent(settingKey)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value }),
+      });
+    } catch {
+      // Best-effort — the .env is the source of truth for the Electron
+      // main process; the backend will pick it up on next restart even
+      // if this call fails.
+    }
+  }
+}
 
 function StepIndicator({ step }: { step: 1 | 2 }) {
   const dot = (n: 1 | 2) => ({
@@ -117,6 +161,9 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
     lines.push('ANTON_MEMORY_MODE=autopilot');
     lines.push('ANTON_EPISODIC_MEMORY=true');
     await host.saveSettings(lines.join('\n'));
+    // Also push to the cowork-server backend DB so the health endpoint
+    // reports configReady=true immediately (without a server restart).
+    await syncToBackend(lines);
     setPhase('success');
     setTimeout(onComplete, 800);
   };
@@ -279,6 +326,7 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
 
     const lines = Object.entries(merged).map(([k, v]) => `${k}=${v}`);
     await host.saveSettings(lines.join('\n'));
+    await syncToBackend(lines);
     setPhase('success');
     setTimeout(onComplete, 800);
   };
