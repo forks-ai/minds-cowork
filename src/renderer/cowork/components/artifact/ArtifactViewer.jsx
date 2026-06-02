@@ -186,6 +186,10 @@ function PathRow({ label, value, copyValue, accent = false, onActivate }) {
           title={`Open ${value}`}
           style={{
             all: 'unset', cursor: 'pointer',
+            // `all: unset` resets display to inline, where text-overflow
+            // ellipsis is a no-op — force a block box so a long URL
+            // truncates instead of overflowing the row.
+            display: 'block',
             minWidth: 0, flex: 1,
             color: accent ? 'var(--accent)' : 'var(--ink-3)',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -203,6 +207,7 @@ function PathRow({ label, value, copyValue, accent = false, onActivate }) {
         >{value}</button>
       ) : (
         <span title={value} style={{
+          display: 'block',
           minWidth: 0, flex: 1,
           color: accent ? 'var(--accent)' : 'var(--ink-3)',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
@@ -235,6 +240,43 @@ function PathRow({ label, value, copyValue, accent = false, onActivate }) {
           e.currentTarget.style.background = 'transparent';
         }}
       >
+        {copied ? Ico.check(11) : Ico.copy(11)}
+      </button>
+    </div>
+  );
+}
+
+// Masked access-password row for a password-protected artifact. The
+// plaintext is owner-only (it comes from `.published.json`, never the
+// published bundle); the eye reveals it and the copy button copies it.
+function AccessPasswordRow({ password }) {
+  const [show, setShow] = useState(false);
+  const [copied, setCopied] = useState(false);
+  if (!password) return null;
+  const masked = '•'.repeat(Math.min(Math.max(password.length, 8), 12));
+  const onCopy = async (e) => {
+    e.stopPropagation();
+    const ok = await copyText(password);
+    if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1400); }
+  };
+  const iconBtn = {
+    flexShrink: 0, background: 'transparent', border: 0, cursor: 'pointer',
+    display: 'inline-grid', placeItems: 'center', width: 20, height: 20, borderRadius: 4,
+  };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, fontFamily: FONT_MONO, fontSize: 10.5 }}>
+      <span style={{ flexShrink: 0, color: 'var(--ink-4)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>password:</span>
+      <span style={{
+        minWidth: 0, flex: '0 1 auto', color: 'var(--ink-3)',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>{show ? password : masked}</span>
+      <button type="button" onClick={(e) => { e.stopPropagation(); setShow((v) => !v); }}
+        title={show ? 'Hide password' : 'Show password'}
+        style={{ ...iconBtn, color: 'var(--ink-4)' }}>
+        {show ? Ico.eyeOff(11) : Ico.eye(11)}
+      </button>
+      <button type="button" onClick={onCopy} title={copied ? 'Copied' : 'Copy password'}
+        style={{ ...iconBtn, color: copied ? 'var(--accent)' : 'var(--ink-4)' }}>
         {copied ? Ico.check(11) : Ico.copy(11)}
       </button>
     </div>
@@ -326,7 +368,7 @@ function ActionsPopover({ open, anchorRect, onClose, items }) {
 const BACKEND_ARTIFACT_TYPES = new Set(['fullstack-stateless-app', 'fullstack-stateful-app']);
 const NOT_PUBLISHABLE_REASON = "Publishing isn't supported for this artifact type";
 
-export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete }) {
+export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, onPublish: onRequestPublish }) {
   const actionPath = artifact?.canonicalPath || artifact?.file_path || artifact?.path || '';
   const displayPath = artifact?.displayPath || actionPath;
   const disabledReason = artifact?.actionDisabledReason || '';
@@ -472,6 +514,12 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete }) 
       setErr(disabledReason || 'This artifact does not have a local file path.');
       return;
     }
+    // Prefer the parent's visibility chooser (public vs password). Fall
+    // back to a direct public publish when no chooser is wired.
+    if (onRequestPublish) {
+      onRequestPublish(artifact);
+      return;
+    }
     setBusy(true);
     try {
       const r = await publishArtifact(actionPath);
@@ -502,8 +550,23 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete }) 
       setBusy(false);
     }
   };
+  // Open the local file only when the file is actually on this machine
+  // (Electron + loopback server). When the desktop app points at a
+  // REMOTE server, or in web, the path is on the server box — open the
+  // HTTP `serveUrl` instead (made absolute via the API origin since an
+  // Electron renderer runs from file://, where a relative URL wouldn't
+  // resolve against the remote server).
+  const canOpenLocalFile = host.isElectron && host.isLocalApiOrigin();
+  // When we can't open a local file (web, or a desktop app pointed at a
+  // remote server) the artifact's address is its HTTP serve URL, not an
+  // OS path the user can't reach — show that "private" URL in the header
+  // instead of the local path.
+  const serveRel = artifact?.serveUrl || '';
+  const privateUrl = (!canOpenLocalFile && serveRel)
+    ? (serveRel.startsWith('http') ? serveRel : `${host.getApiOrigin()}${serveRel}`)
+    : '';
   const onOpenOS = async () => {
-    if (isBackendArtifact) {
+    if (isBackendArtifact && canOpenLocalFile) {
       if (!backendPort) {
         setErr('Backend port not available yet — preview is still loading.');
         return;
@@ -513,6 +576,19 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete }) 
       } catch (e) {
         setErr(e?.message || 'Open failed');
       }
+      return;
+    }
+    if (!canOpenLocalFile) {
+      const rel = artifact?.serveUrl || '';
+      const url = rel
+        ? (rel.startsWith('http') ? rel : `${host.getApiOrigin()}${rel}`)
+        : (publishedUrl || '');
+      if (url) {
+        try { await host.openExternal(url); }
+        catch { window.open(url, '_blank', 'noreferrer'); }
+        return;
+      }
+      setErr('This artifact is served from a remote server and has no open URL yet.');
       return;
     }
     if (!hasActionPath) {
@@ -663,19 +739,30 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete }) 
                 }}
               >{artifact.description}</div>
             )}
-            <PathRow
-              label="local"
-              value={isBackendArtifact ? folderDisplayPath : displayPath}
-              copyValue={isBackendArtifact ? artifactFolder : actionPath}
-              onActivate={hasActionPath ? onOpenLocal : undefined}
-            />
+            {privateUrl ? (
+              <PathRow
+                label="private url"
+                value={privateUrl}
+                onActivate={onOpenOS}
+              />
+            ) : (
+              <PathRow
+                label="local"
+                value={isBackendArtifact ? folderDisplayPath : displayPath}
+                copyValue={isBackendArtifact ? artifactFolder : actionPath}
+                onActivate={hasActionPath ? onOpenLocal : undefined}
+              />
+            )}
             {publishedUrl && (
               <PathRow
-                label="remote"
+                label="public url"
                 value={publishedUrl}
                 accent
                 onActivate={onOpenPublished}
               />
+            )}
+            {publishedUrl && artifact?.accessProtected && (
+              <AccessPasswordRow password={artifact?.accessPassword || ''} />
             )}
           </div>
           {publishedUrl && (
@@ -694,8 +781,10 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete }) 
                 flexShrink: 0,
               }}
             >
-              <span style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--accent)' }} />
-              <span>Published</span>
+              {artifact?.accessProtected
+                ? <span style={{ display: 'inline-flex' }}>{Ico.lock(11)}</span>
+                : <span style={{ width: 6, height: 6, borderRadius: 99, background: 'var(--accent)' }} />}
+              <span>{artifact?.accessProtected ? 'Protected' : 'Published'}</span>
               {/* External-link glyph signals "click → opens in browser",
                   matching the URL pill convention on the artifact card. */}
               <span style={{ display: 'inline-flex', marginLeft: 1 }}>
