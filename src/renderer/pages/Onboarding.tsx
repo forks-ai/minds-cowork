@@ -26,7 +26,9 @@ const GEMINI_MODELS = [
 ];
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
-const MINDS_REGISTER_URL = 'https://auth.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/registrations?client_id=anton-desktop&response_type=code&scope=openid&redirect_uri=http%3A%2F%2F127.0.0.1';
+const KEYCLOAK_URL = import.meta.env.VITE_KEYCLOAK_URL || 'https://auth.dev.mindshub.ai/auth';
+const KEYCLOAK_BASE = KEYCLOAK_URL.replace('/auth', '');
+const MINDS_API_URL = import.meta.env.VITE_MINDS_API_URL || 'https://api.dev.mindshub.ai';
 
 const CUSTOM_MODEL = '__custom__';
 
@@ -63,7 +65,7 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
   const [customModel, setCustomModel] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [llmApiKey, setLlmApiKey] = useState('');
-  const [mindsUrl, setMindsUrl] = useState('https://api.mindshub.ai');
+  const [mindsUrl, setMindsUrl] = useState(MINDS_API_URL);
   const [customBaseUrl, setCustomBaseUrl] = useState('');
   const [phase, setPhase] = useState<Phase>('choose');
   const [errorMsg, setErrorMsg] = useState('');
@@ -517,7 +519,7 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
           </ul>
           <span
             className="provider-card-link"
-            onClick={(e) => { e.stopPropagation(); host.openExternal(MINDS_REGISTER_URL); }}
+            onClick={(e) => { e.stopPropagation(); host.openExternal(`${KEYCLOAK_BASE}/auth/realms/mindsdb/account`); }}
           >
             Get your first week free &rarr;
           </span>
@@ -608,7 +610,7 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
               Don't have an account?{' '}
               <span
                 className="onboard-link"
-                onClick={() => host.openExternal(MINDS_REGISTER_URL)}
+                onClick={() => host.openExternal(`${KEYCLOAK_BASE}/auth/realms/mindsdb/account`)}
               >
                 Sign up for a free week
               </span>
