@@ -18,16 +18,15 @@ interface InstallerOptions {
 
 // Pinned cowork-server version. Bump this deliberately when shipping a
 // cowork release that requires backend changes. The installer will
-// install exactly this version so frontend and backend stay in sync.
-const COWORK_SERVER_VERSION = '0.1.0';
+// install at least this version (a minimum floor), picking up any
+// newer compatible releases automatically.
+const COWORK_SERVER_MIN_VERSION = '0.1.2';
 
 // Package source for cowork-server. Override with COWORK_SERVER_PACKAGE
 // env var (e.g. a local path or alternative git URL during development).
 const COWORK_SERVER_PACKAGE = process.env.COWORK_SERVER_PACKAGE
-  || `cowork-server==${COWORK_SERVER_VERSION}`;
+  || `cowork-server>=${COWORK_SERVER_MIN_VERSION}`;
 
-// hermes-agent is not on PyPI, so we inject it via --with from git.
-const HERMES_AGENT_PACKAGE = 'hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git';
 
 function getSteps(): InstallStep[] {
   const steps: InstallStep[] = [];
@@ -401,13 +400,12 @@ export async function runInstaller(win: BrowserWindow, opts?: InstallerOptions):
     // Step 3: Install cowork-server
     if (abortIfRequested()) return false;
     setStep('cowork-server', 'running');
-    sendLog(win, `\n--- Installing cowork-server v${COWORK_SERVER_VERSION} ---\n`);
+    sendLog(win, `\n--- Installing cowork-server v${COWORK_SERVER_MIN_VERSION}+ ---\n`);
 
     const uvBin = fileExists(getUvBinary()) ? getUvBinary() : 'uv';
     const installArgs = [
       'tool', 'install',
       COWORK_SERVER_PACKAGE,
-      '--with', HERMES_AGENT_PACKAGE,
       '--force', '--reinstall',
     ];
 
