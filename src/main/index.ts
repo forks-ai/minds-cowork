@@ -7,6 +7,7 @@ import * as http from 'http';
 import { IPC } from '../shared/ipc-channels';
 import { checkInstallStatus, runInstaller } from './installer';
 import { startServer, stopServer, isServerRunning, isServerStarting, getServerPort, getServerDiagnostics } from './server-process';
+import { maybeUpdateServer } from './server-updater';
 import { oauthConnect } from './oauth-service';
 import { sendEvent } from './analytics';
 import { getRendererPath, getBundledPath, checkForUIUpdate, applyUIUpdate, hasInternet, getCachedVersion } from './ui-updater';
@@ -599,6 +600,19 @@ app.whenReady().then(() => {
       console.error(`[server] start failed: ${result.reason}`);
     } else {
       console.log(`[server] running on http://127.0.0.1:${result.port}`);
+      // Background update check — runs after the server is already
+      // serving so users aren't blocked. If a newer version is found
+      // on PyPI, stops the server, upgrades, and restarts. Rolls back
+      // automatically if the new version fails the health probe.
+      maybeUpdateServer().then((updateResult) => {
+        if (updateResult.updated) {
+          console.log(`[server-updater] updated ${updateResult.previousVersion} → ${updateResult.newVersion}`);
+        } else if (updateResult.error) {
+          console.error(`[server-updater] ${updateResult.error}`);
+        }
+      }).catch((err) => {
+        console.error('[server-updater] check failed:', err);
+      });
     }
   }).catch((err) => {
     console.error('[server] check-and-start failed:', err);

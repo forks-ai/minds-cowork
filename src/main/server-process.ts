@@ -157,11 +157,10 @@ export async function startServer(opts: { port?: number; readyTimeoutMs?: number
     return { ok: true, port: serverPort };
   }
 
-  // 45s ceiling so the python's in-process `_maybe_self_update_and_reexec`
-  // has room to download + install + execv when a new release lands.
-  // Steady-state boots respond in <2s; only the update-on-launch path
-  // pushes us past 15s. Lower would risk timing out a valid update.
-  const readyTimeoutMs = opts.readyTimeoutMs ?? 45000;
+  // 15s is plenty for a normal boot (typically <2s). Updates are now
+  // handled by the Electron-side server-updater after the server is
+  // already serving, so no need for a long timeout here.
+  const readyTimeoutMs = opts.readyTimeoutMs ?? 15000;
 
   lastStartAt = Date.now();
   // A new start attempt invalidates the prior stop attribution —
