@@ -48,23 +48,39 @@ const ENV_TO_SETTING: Record<string, string> = {
 
 /** Push onboarding settings to the cowork-server backend DB. */
 async function syncToBackend(lines: string[]): Promise<void> {
+  // Collect all env values first so we can detect MindsHub vs generic
+  // openai-compatible. The .env always writes "openai-compatible" for
+  // both, but the backend Provider enum distinguishes "minds_cloud"
+  // (uses minds_api_key + minds_url) from "openai_compatible" (uses
+  // openai_api_key + openai_base_url). build_llm_client() only handles
+  // minds_cloud today, so we must map correctly here.
+  const envMap: Record<string, string> = {};
   for (const line of lines) {
     const eq = line.indexOf('=');
     if (eq <= 0) continue;
-    const envKey = line.slice(0, eq);
-    let value = line.slice(eq + 1);
+    envMap[line.slice(0, eq)] = line.slice(eq + 1);
+  }
+  const hasMindKey = Boolean(envMap.ANTON_MINDS_API_KEY);
+
+  for (const [envKey, value] of Object.entries(envMap)) {
     const settingKey = ENV_TO_SETTING[envKey];
     if (!settingKey) continue;
-    // The backend Provider enum uses underscores (openai_compatible),
-    // but the .env / onboarding uses hyphens (openai-compatible).
+    let dbValue = value;
+    // The .env uses hyphens (openai-compatible) for both MindsHub and
+    // generic endpoints. The backend Provider enum uses underscores and
+    // has separate values: "minds_cloud" vs "openai_compatible".
     if (settingKey.endsWith('_provider')) {
-      value = value.replace(/-/g, '_');
+      if (dbValue === 'openai-compatible' && hasMindKey) {
+        dbValue = 'minds_cloud';
+      } else {
+        dbValue = dbValue.replace(/-/g, '_');
+      }
     }
     try {
       await fetch(`${BASE}/settings/${encodeURIComponent(settingKey)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value }),
+        body: JSON.stringify({ value: dbValue }),
       });
     } catch {
       // Best-effort — the .env is the source of truth for the Electron
