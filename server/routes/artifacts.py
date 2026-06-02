@@ -592,6 +592,32 @@ def _resolve_artifact_path(raw_path: str) -> Path:
     raise HTTPException(status_code=404, detail="Artifact is not in a known artifacts directory")
 
 
+def _artifact_root_for(path: Path) -> Path:
+    """Climb from an artifact file to the folder that holds its
+    `metadata.json` — the artifact root.
+
+    The primary file isn't always at the root: backend+frontend apps
+    keep their frontend in a `static/` subdir (so the backend can mount
+    it with `StaticFiles`), which puts the primary one level below the
+    root. `path.parent` then points at `static/`, where there's no
+    `metadata.json`, and callers that look there miss the backend port
+    entirely. We walk up until we find the dir carrying `metadata.json`,
+    bounded by the registered artifact container dirs
+    (`<base>/.anton/artifacts/`) so a metadata-less tree can't send us
+    climbing into the rest of the disk. Falls back to `path.parent`.
+    """
+    containers = {str(d.resolve()) for d in _scan_artifact_dirs()}
+    current = path.parent.resolve()
+    while True:
+        if (current / "metadata.json").is_file():
+            return current
+        # Stop at a container root (its direct children are the artifact
+        # roots — it has no metadata.json of its own) or the fs root.
+        if str(current) in containers or current.parent == current:
+            return path.parent.resolve()
+        current = current.parent
+
+
 def _reveal_in_file_manager(artifact: Path) -> None:
     if sys.platform == "darwin":
         subprocess.run(["open", "-R", str(artifact)], check=False)
@@ -735,6 +761,39 @@ async def _launch_backend_locked(
         return False, "Artifact is not in a registered project.", 0
 
     pool = scratchpad_runtime.WorkspaceScopedPool(str(project_root))
+
+    # Inject the secrets of datasources the artifact declared in metadata.json
+    # into the backend subprocess only — NOT the cowork server's global
+    # os.environ. The chat flow (conversation_manager) injects broadly because
+    # tools run in-process; here the backend is a separate subprocess, so we
+    # build an explicit env mapping and let the launcher merge it for the spawn.
+    extra_env: dict[str, str] = {}
+    try:
+        meta = _load_metadata(artifact_dir) or {}
+        datasources = meta.get("datasources") or []
+        if datasources:
+            from anton.core.datasources.data_vault import LocalDataVault
+
+            vault = LocalDataVault()
+            for ds in datasources:
+                engine, name = ds.get("engine"), ds.get("name")
+                if not engine or not name:
+                    continue
+                env = vault.env_for(engine, name)
+                if env is None:
+                    logger.warning(
+                        "Datasource %s/%s declared by artifact %s not found in vault — skipping",
+                        engine,
+                        name,
+                        slug,
+                    )
+                    continue
+                extra_env.update(env)
+    except Exception:
+        logger.warning(
+            "Could not build datasource env for backend launch of %s", slug, exc_info=True
+        )
+
     # anton's default health_timeout is 10s — too short for artifacts
     # that do slow IO (HTTP fetches with retry/backoff, large model
     # loads, etc.) before binding their port. The launcher then
@@ -747,6 +806,7 @@ async def _launch_backend_locked(
         artifact_folder=artifact_dir,
         scratchpad_pool=pool,
         tracked_backends=_LAUNCHED_BACKENDS,
+        extra_env=extra_env,
         health_timeout=45.0,
     )
     if isinstance(result, str):
@@ -826,12 +886,16 @@ class PreviewMountRequest(BaseModel):
 async def preview_mount(req: PreviewMountRequest):
     artifact = _resolve_artifact_path(req.path)
     parent = artifact.parent.resolve()
+    # The artifact root (where metadata.json lives) is not always the
+    # primary file's parent — fullstack apps keep their frontend in a
+    # `static/` subdir. Resolve it explicitly for all backend lookups.
+    artifact_root = _artifact_root_for(artifact)
 
     # Backend+frontend artifacts carry a running web server. Detect them
     # by a `port` field in metadata.json — the iframe will load through
     # the Electron-main proxy instead of preview-asset.
     backend_port: int | None = None
-    metadata_path = parent / "metadata.json"
+    metadata_path = artifact_root / "metadata.json"
     if metadata_path.is_file():
         try:
             meta = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -858,16 +922,16 @@ async def preview_mount(req: PreviewMountRequest):
         # helper allocates one each time); we echo it back so the
         # renderer doesn't have to re-read metadata.json.
         running, launch_detail, current_port = await _ensure_backend_running(
-            parent, backend_port
+            artifact_root, backend_port
         )
         # Web shell: register the dir with the in-process proxy and
         # build a loopback URL the iframe can load. Electron ignores
         # `proxyUrl` and goes through its own main-process forwarder.
-        preview_proxy.set_artifact(parent)
-        proxy_url = preview_proxy.url_for(parent) or ""
+        preview_proxy.set_artifact(artifact_root)
+        proxy_url = preview_proxy.url_for(artifact_root) or ""
         return {
             "kind": "proxy",
-            "artifactDir": str(parent),
+            "artifactDir": str(artifact_root),
             "port": current_port if running else backend_port,
             "backendRunning": running,
             "launchError": "" if running else launch_detail,
