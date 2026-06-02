@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-DEFAULT_VERSION="2.26.5.29.3"
+DEFAULT_VERSION="2.26.5.29.4"
 VERSION="${ANTON_VERSION:-$DEFAULT_VERSION}"
 
 echo "→ Installing anton-agent==${VERSION} from PyPI" >&2
