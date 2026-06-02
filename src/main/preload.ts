@@ -65,6 +65,9 @@ contextBridge.exposeInMainWorld('antontron', {
   validateProvider: (provider: string, apiKey: string, baseUrl?: string, model?: string) =>
     ipcRenderer.invoke(IPC.SETTINGS_VALIDATE, provider, apiKey, baseUrl, model),
 
+  // Server
+  restartServer: () => ipcRenderer.invoke(IPC.SERVER_RESTART),
+
   // UI Updates
   checkForUpdate: () => ipcRenderer.invoke(IPC.UI_UPDATE_CHECK),
   applyUpdate: () => ipcRenderer.invoke(IPC.UI_UPDATE_APPLY),

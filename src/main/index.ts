@@ -414,6 +414,18 @@ function setupIPC() {
     return readEnvFile();
   });
 
+  ipcMain.handle(IPC.SERVER_RESTART, async () => {
+    console.log('[server] restart requested (post-onboarding)');
+    await stopServer();
+    const result = await startServer({});
+    if (result.ok) {
+      console.log(`[server] restarted on http://127.0.0.1:${result.port}`);
+    } else {
+      console.error(`[server] restart failed: ${result.reason}`);
+    }
+    return result;
+  });
+
   ipcMain.handle(IPC.SETTINGS_SAVE, async (_event, content: string) => {
     const antonDir = path.join(os.homedir(), '.anton');
     if (!fs.existsSync(antonDir)) {

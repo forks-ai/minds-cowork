@@ -21,6 +21,9 @@ export const IPC = {
   UI_UPDATE_APPLY: 'ui:update-apply',
   UI_UPDATE_STATUS: 'ui:update-status',
 
+  // Server
+  SERVER_RESTART: 'server:restart',
+
   // App
   APP_READY: 'app:ready',
   APP_GET_PLATFORM: 'app:get-platform',

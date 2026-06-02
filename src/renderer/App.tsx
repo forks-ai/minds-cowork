@@ -130,12 +130,12 @@ export default function App() {
     }
     setPage('onboarding');
   };
-  const handleOnboardingComplete = () => {
-    // Skip the launching splash on this path — the Onboarding screen
-    // already shows the orb-in-done state for ~800ms as its success
-    // confirmation, so adding another 1.2s splash on top reads as
-    // dead time. Cross-fade straight to the cowork shell's new-task
-    // landing (HomeView) where the user can start typing immediately.
+  const handleOnboardingComplete = async () => {
+    // Restart the backend so it picks up the freshly-written
+    // ~/.anton/.env (provider keys, model settings). The server
+    // started during Setup before the .env existed, so its cached
+    // env-file list doesn't include it.
+    try { await host.restartServer(); } catch {}
     setPage('terminal');
   };
 

@@ -248,6 +248,14 @@ export async function saveSettings(content: string): Promise<boolean> {
   return true;
 }
 
+export async function restartServer(): Promise<void> {
+  if (isElectron && typeof bridge.restartServer === 'function') {
+    await bridge.restartServer();
+  }
+  // Web deployments don't need a restart — the server reads .env on
+  // each request in that context.
+}
+
 export interface InstallStatus {
   antonInstalled: boolean;
   serverDepsReady: boolean;
@@ -426,6 +434,7 @@ export const host = {
   getUIVersion,
   readSettings,
   saveSettings,
+  restartServer,
   checkInstall,
   checkConfigured,
   validateProvider,
