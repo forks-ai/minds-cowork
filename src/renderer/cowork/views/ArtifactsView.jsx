@@ -1088,7 +1088,7 @@ function ArtifactRow({ artifact, projects, onOpenViewer, onPublish: doPublish, o
 
 // ─── Empty state ─────────────────────────────────────────────────────────
 
-function EmptyState() {
+function EmptyState({ agentLabel = 'the agent' }) {
   return (
     <div style={{
       flex: 1, minHeight: 360,
@@ -1417,7 +1417,7 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
       )}
 
       {total === 0 ? (
-        <EmptyState />
+        <EmptyState agentLabel={agentLabel} />
       ) : effectiveView === 'grid' ? (
         <div className="artifacts-grid" style={{
           padding: '6px 32px 60px',

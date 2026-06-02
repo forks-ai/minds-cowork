@@ -199,7 +199,7 @@ function ConnectionCard({ connection, onDelete, onModify }) {
 
 // ─── Empty state ─────────────────────────────────────────────────────────
 
-function EmptyState({ onConnectNew }) {
+function EmptyState({ onConnectNew, agentLabel = 'the agent' }) {
   return (
     <div style={{
       flex: 1, minHeight: 360,
@@ -671,7 +671,7 @@ export default function CustomizeView({
       )}
 
       {total === 0 ? (
-        <EmptyState onConnectNew={handleConnectNew} />
+        <EmptyState onConnectNew={handleConnectNew} agentLabel={agentLabel} />
       ) : (
         <div style={{
           padding: '6px 32px 60px',
