@@ -18,8 +18,13 @@ export function downloadArtifactFile(artifact, { actionPath } = {}) {
   if (!rel) return false;
   const base = rel.startsWith('http') ? rel : `${host.getApiOrigin()}${rel}`;
   const url = base + (base.includes('?') ? '&' : '?') + 'download=1';
+  // Split on either `/` or `\` so Windows-style paths (which can show
+  // up in `canonicalPath`/`path` when the app runs against a Windows
+  // server) yield the basename instead of leaving the full path as the
+  // suggested filename.
+  const rawPath = actionPath || artifact?.canonicalPath || artifact?.path || '';
   const filename =
-    (actionPath || artifact?.canonicalPath || artifact?.path || '').split('/').pop()
+    rawPath.split(/[\\/]/).filter(Boolean).pop()
     || artifact?.title
     || 'artifact';
   const a = document.createElement('a');

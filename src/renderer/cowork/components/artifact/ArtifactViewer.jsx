@@ -555,38 +555,14 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
   };
   // Universal "save to disk" — type-agnostic stream through the
   // sidecar's serve endpoint with Content-Disposition: attachment.
-  // Distinct from `onDownloadText` below, which works only for
-  // already-fetched text previews (≤200KB) and exists to handle the
-  // truncated-preview case in the web shell.
+  // Used both by the header action-row Download button and by the
+  // "Download full file" affordance under truncated text/CSV previews
+  // in the web shell (the previous `onDownloadText` was a 200KB-
+  // capped Blob fallback; this streams the real file).
   const onDownload = () => {
     if (!downloadArtifactFile(artifact, { actionPath })) {
       setErr(disabledReason || 'This artifact has no serve URL yet.');
     }
-  };
-  // Web-shell download — Electron exposes openPath via the IPC bridge,
-  // but the browser build has no filesystem access. We already loaded
-  // the file body via `previewArtifact`, so wrap it in a Blob and
-  // trigger a synthetic anchor click. Only meaningful when textPreview
-  // is populated (i.e. for .md/.txt/.csv).
-  const onDownloadText = () => {
-    if (!textPreview?.content) {
-      setErr('No content available to download.');
-      return;
-    }
-    const filename = (actionPath || '').split('/').pop() || artifact.title || 'artifact.txt';
-    const blob = new Blob([textPreview.content], {
-      type: textPreview.mime || 'text/plain;charset=utf-8',
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    // Revoke after the click lands — Safari needs a tick before the
-    // download actually starts; revoking synchronously cancels it.
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   const onTrash = async () => {
     if (busy) return;
@@ -924,7 +900,7 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
                   </span>
                   <button
                     type="button"
-                    onClick={host.isWeb ? onDownloadText : onOpenOS}
+                    onClick={host.isWeb ? onDownload : onOpenOS}
                     style={{
                       cursor: 'pointer',
                       background: 'transparent',
