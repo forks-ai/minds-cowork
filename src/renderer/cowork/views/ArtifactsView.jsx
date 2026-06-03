@@ -18,6 +18,7 @@ import {
   artifactServeUrl, openArtifactFile,
 } from '../api';
 import { copyText } from '../lib/clipboard';
+import { downloadArtifactFile } from '../lib/artifactDownload';
 import { Modal, ModalHeader, ModalBody, ModalFooter } from '../components/ui/Modal';
 import { ArtifactViewer } from '../components/artifact';
 import {
@@ -812,7 +813,7 @@ function StatusDot({ artifact }) {
   );
 }
 
-function RowMenu({ open, anchorRect, artifact, onClose, onOpen, onReveal, onCopyUrl, onPublish, onUnpublish, onDelete }) {
+function RowMenu({ open, anchorRect, artifact, onClose, onOpen, onReveal, onDownload, onCopyUrl, onPublish, onUnpublish, onDelete }) {
   const ref = useRef(null);
   useEffect(() => {
     if (!open) return;
@@ -876,6 +877,9 @@ function RowMenu({ open, anchorRect, artifact, onClose, onOpen, onReveal, onCopy
     >
       <Item label={isHtml ? 'Open viewer' : 'Open'} icon={Ico.externalLink(13)} onClick={onOpen} />
       <Item label="Reveal in Finder" icon={Ico.folder(13)} onClick={onReveal} />
+      {onDownload && artifact?.serveUrl && (
+        <Item label="Download" icon={Ico.download(13)} onClick={onDownload} />
+      )}
       {published && <Item label="Copy URL" icon={Ico.copy(13)} onClick={onCopyUrl} />}
       {isHtml && !published && (
         <Item label="Publish" icon={Ico.upload(13)} onClick={onPublish} />
@@ -1077,6 +1081,7 @@ function ArtifactRow({ artifact, projects, onOpenViewer, onPublish: doPublish, o
         onClose={() => setMenuOpen(false)}
         onOpen={onRowOpen}
         onReveal={() => revealArtifact(artifact.path)}
+        onDownload={() => downloadArtifactFile(artifact)}
         onCopyUrl={onCopyUrl}
         onPublish={() => doPublish?.(artifact)}
         onUnpublish={() => doUnpublish?.(artifact)}

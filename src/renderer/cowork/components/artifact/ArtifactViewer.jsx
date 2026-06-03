@@ -13,6 +13,7 @@ import {
   unpublishArtifact,
 } from '../../api';
 import { copyText } from '../../lib/clipboard';
+import { downloadArtifactFile } from '../../lib/artifactDownload';
 import { Modal } from '../ui/Modal';
 import { host } from '../../../platform/host';
 import { MarkdownContent } from '../markdown/MarkdownContent';
@@ -552,6 +553,16 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
       setErr(e?.message || 'Open failed');
     }
   };
+  // Universal "save to disk" — type-agnostic stream through the
+  // sidecar's serve endpoint with Content-Disposition: attachment.
+  // Distinct from `onDownloadText` below, which works only for
+  // already-fetched text previews (≤200KB) and exists to handle the
+  // truncated-preview case in the web shell.
+  const onDownload = () => {
+    if (!downloadArtifactFile(artifact, { actionPath })) {
+      setErr(disabledReason || 'This artifact has no serve URL yet.');
+    }
+  };
   // Web-shell download — Electron exposes openPath via the IPC bridge,
   // but the browser build has no filesystem access. We already loaded
   // the file body via `previewArtifact`, so wrap it in a Blob and
@@ -775,6 +786,23 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
               }}
             >
               {busy ? 'Publishing…' : 'Publish'}
+            </button>
+          )}
+          {artifact?.serveUrl && (
+            <button
+              type="button"
+              onClick={onDownload}
+              title="Download artifact to your computer"
+              style={{
+                cursor: 'pointer',
+                background: 'transparent',
+                border: '1px solid var(--line)',
+                color: 'var(--ink-2)',
+                padding: '6px 12px', borderRadius: 8,
+                fontSize: 12.5, fontWeight: 500,
+              }}
+            >
+              Download
             </button>
           )}
           <button

@@ -472,11 +472,17 @@ def _serve_url_for(path: str | Path) -> str:
 
 
 @router.get("/serve/{project_name}/{file_path:path}")
-def serve_artifact(project_name: str, file_path: str):
+def serve_artifact(project_name: str, file_path: str, download: bool = False):
     """Serve a file from `<project>/.anton/artifacts/<file_path>` over
     HTTP. Stateless, origin-relative, frame-able (no X-Frame-Options) so
     the in-app iframe and a plain new-tab open both work in the web
-    deployment without round-tripping a publish to the external host."""
+    deployment without round-tripping a publish to the external host.
+
+    When `?download=1`, sets `Content-Disposition: attachment` so the
+    browser triggers a save-as dialog instead of rendering the file
+    inline. Type-agnostic — any artifact byte stream (HTML, JSON, CSV,
+    PNG, PDF, binary, …) downloads through the same path.
+    """
     base = _project_artifacts_base(project_name)
     if base is None:
         raise HTTPException(status_code=404, detail="Unknown project")
@@ -492,9 +498,19 @@ def serve_artifact(project_name: str, file_path: str):
     # frames this same-origin. The viewer's iframe sandbox already
     # drops `allow-same-origin`, so framing can't be abused to read the
     # API with the user's session.
-    return FileResponse(target, media_type=media_type, headers={
-        "Cache-Control": "private, max-age=60",
-    })
+    headers = {"Cache-Control": "private, max-age=60"}
+    if download:
+        # RFC 5987 form for the filename — ASCII fallback for old
+        # browsers, UTF-8 `filename*` for everyone else. Quoting handles
+        # CJK / emoji / spaces / quotes in artifact filenames without
+        # blowing up the header.
+        fname = target.name
+        ascii_fallback = fname.encode("ascii", "replace").decode("ascii")
+        headers["Content-Disposition"] = (
+            f'attachment; filename="{ascii_fallback}"; '
+            f"filename*=UTF-8''{quote(fname)}"
+        )
+    return FileResponse(target, media_type=media_type, headers=headers)
 
 
 # ─── Listing ───────────────────────────────────────────────────────────────
