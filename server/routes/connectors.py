@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import json
 import logging
 import os
@@ -461,8 +462,10 @@ class ConnectorOAuthStartRequest(BaseModel):
 
 def _connector_oauth_callback_page(title: str, message: str, *, success: bool) -> HTMLResponse:
     accent = "#1F9CB0" if success else "#b42318"
+    safe_title = html.escape(title, quote=True)
+    safe_message = html.escape(message, quote=True)
     return HTMLResponse(content=f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>{title}</title>
+<html lang="en"><head><meta charset="utf-8"><title>{safe_title}</title>
 <style>
   :root {{ color-scheme: light dark; }}
   html, body {{ margin: 0; height: 100%; }}
@@ -476,8 +479,8 @@ def _connector_oauth_callback_page(title: str, message: str, *, success: bool) -
     background: {accent}; margin-right: 8px; vertical-align: middle; }}
 </style></head>
 <body><div class="card">
-  <h1><span class="dot"></span>{title}</h1>
-  <p>{message}</p>
+  <h1><span class="dot"></span>{safe_title}</h1>
+  <p>{safe_message}</p>
 </div></body></html>""")
 
 
