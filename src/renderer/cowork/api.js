@@ -896,8 +896,8 @@ export async function startGmailAuth() {
   return req('/integrations/gmail/oauth/start', { method: 'POST', body: JSON.stringify({}) });
 }
 
-export async function startGoogleAdsAuth() {
-  return req('/integrations/google-ads/oauth/start', { method: 'POST', body: JSON.stringify({}) });
+export async function startGoogleAdsAuth(params = {}) {
+  return req('/integrations/google-ads/oauth/start', { method: 'POST', body: JSON.stringify(params) });
 }
 
 export async function startGoogleAnalyticsAuth() {
@@ -1175,8 +1175,11 @@ export async function submitDataVaultForm({ formId, conversationId, values, skip
   return { status: 'streamed', body: text };
 }
 
-export async function publishArtifact(path) {
-  return req('/publish', { method: 'POST', body: JSON.stringify({ path }) });
+// `password` (optional): when a non-empty string, the artifact is
+// published password-protected; omit / empty publishes it public.
+export async function publishArtifact(path, password) {
+  const body = password ? { path, password } : { path };
+  return req('/publish', { method: 'POST', body: JSON.stringify(body) });
 }
 
 export async function fetchBrowseStatus() {

@@ -184,6 +184,52 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
       return;
     }
 
+    // Built-in browser OAuth — user clicked Submit after filling any
+    // required fields (e.g. developer token for Google Ads).
+    if (authMethod === 'browser_oauth_builtin' && kind === 'primary') {
+      const engine = spec.engine || spec._connector_id || 'google_drive';
+      const startFn = BROWSER_OAUTH_START[engine];
+      if (!startFn) { setError(`No OAuth start handler for engine "${engine}".`); return; }
+      const successTitle = BROWSER_OAUTH_TITLE[engine] || 'Connected';
+      setBusy(true);
+      setError('');
+      try {
+        const result = await startFn(values || {});
+        if (!result?.authUrl) throw new Error('Could not start Google sign-in. Is the server running?');
+        window.open(result.authUrl, '_blank');
+        const startedAt = result.startedAt || '';
+        const deadline = Date.now() + BROWSER_OAUTH_TIMEOUT_MS;
+        const poll = setInterval(async () => {
+          try {
+            if (Date.now() > deadline) {
+              clearInterval(poll);
+              setBusy(false);
+              setError('Sign-in timed out. Please try again.');
+              return;
+            }
+            const data = await fetchIntegrations();
+            const item = (data?.items || []).find((i) => i.id === engine);
+            const lastSuccessAt = item?.oauth?.lastSuccessAt || '';
+            if (lastSuccessAt && (!startedAt || lastSuccessAt >= startedAt)) {
+              clearInterval(poll);
+              setBusy(false);
+              try { await fetchDatasources(); } catch { /* best effort */ }
+              patchForm(conversationId, {
+                form_id: spec.form_id,
+                _is_success: true,
+                title: successTitle,
+                subtitle: "Saved to Anton's data vault. Anton can now use this connection in tasks.",
+              });
+            }
+          } catch { /* keep polling */ }
+        }, BROWSER_OAUTH_POLL_MS);
+      } catch (e) {
+        setError(e?.message || 'Could not start Google sign-in.');
+        setBusy(false);
+      }
+      return;
+    }
+
     // OAuth submit — when the active method declares
     // `submit_action: "oauth_launch"`, run the PKCE browser flow
     // before handing off to the save path. We resolve client_id /
@@ -661,6 +707,10 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
           conversationId={conversationId}
           onMethodChange={async (methodId) => {
             if (methodId !== 'browser_oauth_builtin') return;
+            // Methods with fields wait for Submit — handleAction takes over.
+            const method = Array.isArray(spec?.methods) ? spec.methods.find((m) => m.id === methodId) : null;
+            if (method?.fields?.length) return;
+            // No fields — auto-start immediately on method selection.
             const engine = spec.engine || spec._connector_id || 'google_drive';
             const startFn = BROWSER_OAUTH_START[engine];
             if (!startFn) { setError(`No OAuth start handler for engine "${engine}".`); return; }
@@ -668,7 +718,7 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
             setBusy(true);
             setError('');
             try {
-              const result = await startFn();
+              const result = await startFn({});
               if (!result?.authUrl) throw new Error('Could not start Google sign-in. Is the server running?');
               window.open(result.authUrl, '_blank');
               const startedAt = result.startedAt || '';
