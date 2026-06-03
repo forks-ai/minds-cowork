@@ -22,7 +22,7 @@ import UtilitiesView from './views/UtilitiesView';
 import SearchModal from './components/SearchModal';
 import ConnectorPicker from './components/connector/ConnectorPicker';
 import ServerOfflineHelpModal from './components/ServerOfflineHelpModal';
-import { setForm as setDataVaultForm, getFormState as getDataVaultFormState } from './components/datavault/formStore';
+import { setForm as setDataVaultForm, getForm as getDataVaultForm, clearForm as clearDataVaultForm, patchForm as patchDataVaultForm, getFormState as getDataVaultFormState } from './components/datavault/formStore';
 import { host } from '../platform/host';
 import { getAgentLabel } from './lib/agentLabel';
 import { useBreakpoint } from './hooks/useBreakpoint';
@@ -2510,6 +2510,16 @@ function AppCore() {
         activeStreamingTaskIdRef.current = sid;
       }
       setActiveTaskId((curr) => (curr === previousId ? sid : curr));
+      // Migrate the formStore entry so the DataVaultFormPanel
+      // (which re-subscribes under the new id) and incoming
+      // data-vault-form-patch blocks (keyed to the new id) both
+      // find the form. Without this the panel loses its spec and
+      // the success patch falls through to a bare setForm.
+      const existingForm = getDataVaultForm(previousId);
+      if (existingForm) {
+        setDataVaultForm(sid, existingForm);
+        clearDataVaultForm(previousId);
+      }
     };
 
     const flushStreaming = () => {
@@ -2543,6 +2553,36 @@ function AppCore() {
         const sid = ev?.conversation_id || ev?.response?.conversation_id;
         if (sid) adoptServerId(sid);
         streamState = reduceStream(streamState, ev);
+        // The probe's `data-vault-form-patch` success signal travels
+        // inside the SSE body text, but MarkdownCode can't process it
+        // (the streaming message has complete=false, and the final
+        // assistant message mounts as historical). Detect the terminal
+        // `response.completed` event with status "success" and flip
+        // the form store directly so the DataVaultFormPanel shows the
+        // success state and the user can dismiss the modal.
+        if (ev?.type === 'response.completed') {
+          const cid = resolvedId || id;
+          const currentForm = getDataVaultForm(cid);
+          if (currentForm) {
+            const respStatus = ev?.response?.status;
+            if (respStatus === 'success') {
+              patchDataVaultForm(cid, {
+                form_id: currentForm.form_id,
+                _is_probing: false,
+                _is_success: true,
+                status_text: null,
+                form_error: null,
+              });
+            } else if (respStatus === 'retry' || respStatus === 'failed') {
+              patchDataVaultForm(cid, {
+                form_id: currentForm.form_id,
+                _is_probing: false,
+                _is_success: false,
+                status_text: null,
+              });
+            }
+          }
+        }
         flushSync(() => flushStreaming());
       },
       onChunk(chunk, sid) {

@@ -62,8 +62,14 @@ function checkConfigured(): { configured: boolean; provider: string } {
   if (vars.ANTON_ANTHROPIC_API_KEY) {
     return { configured: true, provider: 'anthropic' };
   }
-  if (vars.ANTON_OPENAI_API_KEY && vars.ANTON_OPENAI_BASE_URL) {
+  if (vars.ANTON_MINDS_API_KEY) {
     return { configured: true, provider: 'minds' };
+  }
+  if (vars.ANTON_OPENAI_API_KEY && vars.ANTON_OPENAI_BASE_URL) {
+    return { configured: true, provider: 'openai' };
+  }
+  if (vars.ANTON_OPENAI_API_KEY) {
+    return { configured: true, provider: 'openai' };
   }
   return { configured: false, provider: '' };
 }
