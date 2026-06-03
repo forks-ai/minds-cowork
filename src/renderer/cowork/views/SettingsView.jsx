@@ -110,7 +110,10 @@ function inferProviderPreset(s) {
   const baseUrl = (s.openaiBaseUrl || '').trim();
   if (provider === 'anthropic') return 'anthropic';
   if (provider === 'openai') return 'openai';
-  if (provider === 'openai-compatible') {
+  // The backend DB stores "minds_cloud" for MindsHub; treat it the same
+  // as detecting openai-compatible + a mindshub base URL.
+  if (provider === 'minds_cloud' || provider === 'minds-cloud') return 'minds-cloud';
+  if (provider === 'openai-compatible' || provider === 'openai_compatible') {
     if (baseUrl.startsWith('https://generativelanguage.googleapis.com/')) return 'gemini';
     if (baseUrl.includes('mdb.ai') || baseUrl.includes('mindshub.ai') || baseUrl.endsWith(MINDS_API_PATH_SUFFIX) && (s.mindsApiKey || s.mindsUrl)) {
       return 'minds-cloud';
@@ -152,8 +155,8 @@ function applyProviderPreset(preset, settings, setSetting) {
       setSetting('openaiBaseUrl', '');
     }
   } else if (preset === 'minds-cloud') {
-    setSetting('planningProvider', 'openai-compatible');
-    setSetting('codingProvider', 'openai-compatible');
+    setSetting('planningProvider', 'minds_cloud');
+    setSetting('codingProvider', 'minds_cloud');
     const mindsUrl = (settings.mindsUrl || 'https://api.mindshub.ai').replace(/\/+$/, '');
     setSetting('mindsUrl', mindsUrl);
     setSetting('openaiBaseUrl', `${mindsUrl}${MINDS_API_PATH_SUFFIX}`);
