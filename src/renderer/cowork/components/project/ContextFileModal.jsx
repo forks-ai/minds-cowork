@@ -430,7 +430,10 @@ export default function ContextFileModal({
                   color: 'var(--ink-2)',
                   padding: '6px 12px', borderRadius: 6,
                   fontFamily: FONT_BODY, fontSize: 12.5, fontWeight: 500,
+                  transition: 'background .12s, color .12s',
                 }}
+                onMouseOver={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--ink) 8%, transparent)'; e.currentTarget.style.color = 'var(--ink)'; }}
+                onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--ink-2)'; }}
               >Edit</button>
             )}
             {/* HTML preview + binary modes both expose a "Reveal" /
@@ -455,7 +458,10 @@ export default function ContextFileModal({
                 width: 28, height: 28, borderRadius: 6,
                 display: 'inline-grid', placeItems: 'center',
                 fontSize: 18, lineHeight: 1,
+                transition: 'background .12s, color .12s',
               }}
+              onMouseOver={(e) => { if (!busy) { e.currentTarget.style.background = 'color-mix(in srgb, var(--ink) 10%, transparent)'; e.currentTarget.style.color = 'var(--ink)'; } }}
+              onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--ink-3)'; }}
             >×</button>
           </div>
         </div>
@@ -588,7 +594,10 @@ export default function ContextFileModal({
                   padding: '7px 0', borderRadius: 7,
                   fontFamily: FONT_BODY, fontSize: 12.5, fontWeight: 500,
                   opacity: busy ? 0.5 : 1,
+                  transition: 'opacity .12s',
                 }}
+                onMouseOver={(e) => { if (!busy) e.currentTarget.style.opacity = '0.7'; }}
+                onMouseOut={(e) => { e.currentTarget.style.opacity = busy ? '0.5' : '1'; }}
               >Delete</button>
             )}
           </div>
@@ -610,7 +619,10 @@ export default function ContextFileModal({
                   color: 'var(--ink-3)',
                   padding: '7px 14px', borderRadius: 7,
                   fontFamily: FONT_BODY, fontSize: 13, fontWeight: 500,
+                  transition: 'background .12s, color .12s',
                 }}
+                onMouseOver={(e) => { if (!busy) { e.currentTarget.style.background = 'color-mix(in srgb, var(--ink) 8%, transparent)'; e.currentTarget.style.color = 'var(--ink)'; } }}
+                onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--ink-3)'; }}
               >Cancel</button>
             )}
             {editing && (
@@ -633,7 +645,10 @@ export default function ContextFileModal({
                   color: 'var(--ink-3)',
                   padding: '7px 14px', borderRadius: 7,
                   fontFamily: FONT_BODY, fontSize: 13, fontWeight: 500,
+                  transition: 'background .12s, color .12s',
                 }}
+                onMouseOver={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--ink) 8%, transparent)'; e.currentTarget.style.color = 'var(--ink)'; }}
+                onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--ink-3)'; }}
               >Close</button>
             )}
           </div>

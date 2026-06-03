@@ -434,20 +434,30 @@ function ApiKeyInput({ value, onChange, placeholder, disabled, revealName }) {
   const btnStyleActive = { ...btnStyle, color: 'var(--text-strong)', background: 'var(--surface-2, rgba(255,255,255,0.04))' };
 
   // When the field is holding the server sentinel and the user hasn't
-  // toggled reveal, render the input as empty + a long bullet placeholder.
-  // The literal "***" rendered as type=password is only 3 dots wide, which
-  // looks like an almost-empty field rather than "a stored key is here."
-  // Typing replaces the (empty) value cleanly — no asterisk contamination.
+  // toggled reveal, show a row of bullet characters as the actual input
+  // value (not a placeholder) so it's visually obvious a key is stored.
+  // Typing clears the mask and starts a fresh local edit.
   const showSentinelAsMask = !show && v === '***';
+  const maskedValue = showSentinelAsMask ? '••••••••••••••••' : v;
 
   return (
     <div style={{ position: 'relative' }}>
       <input
         className="field-input mono"
-        type={show ? 'text' : 'password'}
-        value={showSentinelAsMask ? '' : v}
-        onChange={(e) => onInput(e.target.value)}
-        placeholder={showSentinelAsMask ? '••••••••••••••••' : (placeholder || '••••••••••••••••••')}
+        type={show || showSentinelAsMask ? 'text' : 'password'}
+        value={maskedValue}
+        onChange={(e) => {
+          if (showSentinelAsMask) {
+            // First keystroke while masked — clear the bullet mask and
+            // start fresh with whatever character the user typed.
+            const typed = e.target.value.replace(/•/g, '');
+            onInput(typed);
+          } else {
+            onInput(e.target.value);
+          }
+        }}
+        onFocus={(e) => { if (showSentinelAsMask) e.target.select(); }}
+        placeholder={placeholder || '••••••••••••••••••'}
         disabled={disabled}
         autoComplete="off"
         spellCheck={false}
