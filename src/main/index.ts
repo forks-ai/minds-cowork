@@ -7,7 +7,7 @@ import * as http from 'http';
 import { IPC } from '../shared/ipc-channels';
 import { checkInstallStatus, runInstaller } from './installer';
 import { startServer, stopServer, isServerRunning, isServerStarting, getServerPort, getServerDiagnostics } from './server-process';
-import { maybeUpdateServer } from './server-updater';
+import { maybeUpdateServer, setUpdateNotifier } from './server-updater';
 import { oauthConnect } from './oauth-service';
 import { sendEvent } from './analytics';
 import { getRendererPath, getBundledPath, checkForUIUpdate, applyUIUpdate, hasInternet, getCachedVersion } from './ui-updater';
@@ -616,6 +616,9 @@ app.whenReady().then(() => {
       // serving so users aren't blocked. If a newer version is found
       // on PyPI, stops the server, upgrades, and restarts. Rolls back
       // automatically if the new version fails the health probe.
+      setUpdateNotifier((payload) => {
+        mainWindow?.webContents.send(IPC.SERVER_UPDATE_STATUS, payload);
+      });
       maybeUpdateServer().then((updateResult) => {
         if (updateResult.updated) {
           console.log(`[server-updater] updated ${updateResult.previousVersion} → ${updateResult.newVersion}`);

@@ -135,10 +135,21 @@ export async function start({ readyTimeoutMs = 15000 } = {}) {
 
 export function stop() {
   if (serverProcess) {
+    // Kill the entire process group (detached child + grandchildren)
+    // so the Python server doesn't survive as an orphan holding the port.
+    if (serverProcess.pid) {
+      try { process.kill(-serverProcess.pid, 'SIGTERM'); } catch {}
+    }
     try { serverProcess.kill('SIGTERM'); } catch {}
     serverProcess = null;
     serverStarted = false;
   }
+}
+
+// Ensure the detached server process group is cleaned up if the parent
+// exits unexpectedly (crash, uncaught exception, SIGTERM, etc.).
+for (const sig of ['exit', 'SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(sig, () => { stop(); });
 }
 
 export function isRunning() {

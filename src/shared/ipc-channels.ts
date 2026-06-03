@@ -23,6 +23,7 @@ export const IPC = {
 
   // Server
   SERVER_RESTART: 'server:restart',
+  SERVER_UPDATE_STATUS: 'server:update-status',
 
   // App
   APP_READY: 'app:ready',

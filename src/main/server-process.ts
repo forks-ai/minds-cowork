@@ -53,6 +53,17 @@ function appendStderr(chunk: string) {
   recentStderr = (recentStderr + chunk).slice(-STDERR_BUFFER_BYTES);
 }
 
+// Kill a child process and its entire process group (POSIX). When we
+// spawn with detached:true the child leads its own group, so
+// process.kill(-pid) reaches grandchildren (e.g. python spawned by uv).
+// Falls back to child.kill() on Windows or if the group kill fails.
+function killTree(proc: ChildProcess, signal: NodeJS.Signals): void {
+  if (process.platform !== 'win32' && proc.pid) {
+    try { process.kill(-proc.pid, signal); return; } catch {}
+  }
+  try { proc.kill(signal); } catch {}
+}
+
 export function getServerPort(): number {
   return serverPort;
 }
@@ -152,6 +163,7 @@ export async function startServer(opts: { port?: number; readyTimeoutMs?: number
   const alreadyHealthy = await probeHealth(500);
   if (alreadyHealthy) {
     serverStarted = true;
+    _adoptedExternal = true;
     lastStartError = null;
     console.log(`[server] adopted existing instance on port ${serverPort}`);
     return { ok: true, port: serverPort };
@@ -169,6 +181,7 @@ export async function startServer(opts: { port?: number; readyTimeoutMs?: number
   // transition to "not running" reflects this start cycle's reason.
   lastStopIntentional = null;
   _stopRequested = false;
+  _adoptedExternal = false;
 
   // Determine how to spawn the server:
   //   Dev mode:  `uv run cowork-server` from the sibling source dir
@@ -209,10 +222,15 @@ export async function startServer(opts: { port?: number; readyTimeoutMs?: number
       COWORK_SERVER_HOST: SERVER_HOST,
     };
 
+    // detached: true on POSIX puts the child in its own process group so
+    // we can kill the entire tree (uv + grandchild python) with a single
+    // process.kill(-pid). Without this, SIGTERM only reaches `uv` and
+    // the grandchild python survives, holding the port.
     const child = spawn(spawnCmd, spawnArgs, {
       cwd: spawnCwd,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
     });
 
     child.stdout.on('data', (d) => {
@@ -256,13 +274,13 @@ export async function startServer(opts: { port?: number; readyTimeoutMs?: number
       // bind-collide and fail the same way — making the "stop +
       // start" cycle look broken from the user's side. SIGTERM with
       // a SIGKILL fallback so a hung uvicorn boot can't outlive us.
-      try { child.kill('SIGTERM'); } catch {}
+      killTree(child, 'SIGTERM');
       const exited = new Promise<void>((resolve) => {
         child.once('exit', () => resolve());
       });
       await Promise.race([exited, new Promise<void>((r) => setTimeout(r, 2_000))]);
       if (child.exitCode === null && !child.killed) {
-        try { child.kill('SIGKILL'); } catch {}
+        killTree(child, 'SIGKILL');
         await Promise.race([exited, new Promise<void>((r) => setTimeout(r, 1_000))]);
       }
       if (serverProcess === child) serverProcess = null;
@@ -327,7 +345,7 @@ export async function stopServer(): Promise<void> {
     // race-with-timeout below covers us.
   });
 
-  try { proc.kill('SIGTERM'); } catch {}
+  killTree(proc, 'SIGTERM');
 
   await Promise.race([
     exited,
@@ -337,7 +355,7 @@ export async function stopServer(): Promise<void> {
   // Still alive? Force-kill. `proc.exitCode === null` means the child
   // hasn't reported an exit code yet → still running.
   if (proc.exitCode === null && !proc.killed) {
-    try { proc.kill('SIGKILL'); } catch {}
+    killTree(proc, 'SIGKILL');
     await Promise.race([
       exited,
       new Promise<void>((resolve) => setTimeout(resolve, 1_500)),
@@ -353,11 +371,20 @@ export async function stopServer(): Promise<void> {
   }
 }
 
+// Track whether we adopted an external server (no child process to manage)
+// vs spawned our own. When adopted, serverProcess is expected to be null.
+let _adoptedExternal = false;
+
 // True once /health has confirmed the python is responsive.
-// serverProcess may be null when we adopted an externally-started
-// server (e.g. dev running `uv run cowork-server` in a terminal).
+// When we spawned the child ourselves, also checks that the process
+// handle is still alive — prevents returning true after an unexpected
+// crash that nulled serverProcess via the exit handler.
+// When we adopted an externally-started server (no child to track),
+// trusts the serverStarted flag since we don't own the process.
 export function isServerRunning(): boolean {
-  return serverStarted;
+  if (!serverStarted) return false;
+  if (_adoptedExternal) return true;
+  return serverProcess !== null;
 }
 
 // True between spawn() and the first successful /health probe — i.e.

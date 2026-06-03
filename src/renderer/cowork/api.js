@@ -890,55 +890,74 @@ export async function revealArtifact(path) {
 // skip no-op writes and by the masked-sentinel ("***") skip logic.
 let _lastFetchedSettings = {};
 
+// Serialize settings reads/writes so a concurrent fetchSettings +
+// updateSettings can't race on _lastFetchedSettings.
+let _settingsLock = Promise.resolve();
+
 export async function fetchSettings() {
-  try {
-    const rows = await req('/settings/');
-    const result = transformSettingsRows(rows);
+  const op = _settingsLock.then(async () => {
     try {
-      const v = await req('/settings/validate', { method: 'POST', body: JSON.stringify({}) });
-      result.configReady = v.configReady;
-      result.configError = v.configError;
-      result.providerLabel = v.provider;
-    } catch { /* leave defaults */ }
-    _lastFetchedSettings = result;
-    return result;
-  } catch {
-    return { ...MOCK_DATA.settings, configReady: false, configError: 'Backend is offline.' };
-  }
+      const rows = await req('/settings/');
+      const result = transformSettingsRows(rows);
+      try {
+        const v = await req('/settings/validate', { method: 'POST', body: JSON.stringify({}) });
+        result.configReady = v.configReady;
+        result.configError = v.configError;
+        result.providerLabel = v.provider;
+      } catch { /* leave defaults */ }
+      _lastFetchedSettings = result;
+      return result;
+    } catch {
+      return { ...MOCK_DATA.settings, configReady: false, configError: 'Backend is offline.' };
+    }
+  });
+  _settingsLock = op.catch(() => {});
+  return op;
 }
 
 export async function updateSettings(patch) {
-  const writes = diffSettingsForWrite(patch, _lastFetchedSettings);
+  const op = _settingsLock.then(async () => {
+    const writes = diffSettingsForWrite(patch, _lastFetchedSettings);
 
-  const updated = [];
-  const failed = [];
-  for (const [key, value] of Object.entries(writes)) {
-    try {
-      await req(`/settings/${encodeURIComponent(key)}`, {
-        method: 'PUT',
-        body: JSON.stringify({ value }),
-      });
-      updated.push(key);
-    } catch (err) {
-      console.warn(`Failed to save setting ${key}:`, err);
-      failed.push({ key, message: err?.message || String(err) });
+    const updated = [];
+    const failed = [];
+    for (const [key, value] of Object.entries(writes)) {
+      try {
+        await req(`/settings/${encodeURIComponent(key)}`, {
+          method: 'PUT',
+          body: JSON.stringify({ value }),
+        });
+        updated.push(key);
+      } catch (err) {
+        console.warn(`Failed to save setting ${key}:`, err);
+        failed.push({ key, message: err?.message || String(err) });
+      }
     }
-  }
 
-  if (failed.length > 0) {
-    const summary = failed.map((f) => `${f.key}: ${f.message}`).join('; ');
-    const err = new Error(`Failed to save ${failed.length === 1 ? 'setting' : 'settings'}: ${summary}`);
-    err.failed = failed;
-    err.updated = updated;
-    throw err;
-  }
+    if (failed.length > 0) {
+      const summary = failed.map((f) => `${f.key}: ${f.message}`).join('; ');
+      const err = new Error(`Failed to save ${failed.length === 1 ? 'setting' : 'settings'}: ${summary}`);
+      err.failed = failed;
+      err.updated = updated;
+      throw err;
+    }
 
-  try {
-    const v = await req('/settings/validate', { method: 'POST', body: JSON.stringify({}) });
-    return { status: 'ok', updated, configReady: v.configReady, configError: v.configError };
-  } catch {
-    return { status: 'ok', updated };
-  }
+    // Re-fetch after successful writes so _lastFetchedSettings reflects
+    // the server's canonical state (including any server-side defaults).
+    try {
+      const rows = await req('/settings/');
+      _lastFetchedSettings = transformSettingsRows(rows);
+    } catch { /* keep prior snapshot */ }
+
+    try {
+      const v = await req('/settings/validate', { method: 'POST', body: JSON.stringify({}) });
+      return { status: 'ok', updated, configReady: v.configReady, configError: v.configError };
+    } catch {
+      return { status: 'ok', updated };
+    }
+  });
+  _settingsLock = op.catch(() => {});
+  return op;
 }
 
 export async function validateSettings() {

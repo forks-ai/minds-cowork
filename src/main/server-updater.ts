@@ -154,6 +154,14 @@ function installVersion(uv: string, version: string): Promise<{ ok: boolean; std
 // Public API
 // ---------------------------------------------------------------------------
 
+/** Optional callback to notify the renderer of update status changes. */
+let _notify: ((payload: Record<string, unknown>) => void) | null = null;
+
+/** Set a callback that receives update status events (e.g. to forward via IPC). */
+export function setUpdateNotifier(fn: (payload: Record<string, unknown>) => void): void {
+  _notify = fn;
+}
+
 /**
  * Check for a newer cowork-server on PyPI and upgrade if available.
  *
@@ -171,6 +179,7 @@ export async function maybeUpdateServer(): Promise<ServerUpdateResult> {
     return await _doUpdateCheck();
   } catch (err: any) {
     console.error('[server-updater] unexpected error:', err);
+    _notify?.({ phase: 'error', error: err.message });
     return { updated: false, error: err.message };
   }
 }
@@ -241,6 +250,13 @@ async function _doUpdateCheck(): Promise<ServerUpdateResult> {
       await startServer();
     } else {
       console.error('[server-updater] rollback also failed:', rollback.stderr);
+      // Critical: server is down and we can't recover automatically.
+      // Notify the renderer so it can show a visible error to the user.
+      _notify?.({
+        phase: 'error',
+        error: `Server update to ${latestVersion} failed and rollback to ${currentVersion} also failed. Restart the app to recover.`,
+        critical: true,
+      });
     }
     return {
       updated: false,
