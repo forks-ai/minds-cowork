@@ -81,9 +81,28 @@ function patchScratchpadStepById(steps, toolUseId, patch) {
   return next;
 }
 
-/** Same but only acts on an in-progress scratchpad — used by close
- *  signals (response.completed/failed) to flip a still-open trailing
- *  step to completed without overwriting output later. */
+/** Close any still-open inspectable step on terminal stream events.
+ *  Keep this scoped to step types whose lifetime is owned by this
+ *  adapter so future progress/artifact step types can define their
+ *  own terminal behavior. */
+function closeOpenInspectableSteps(steps, completedAt) {
+  let changed = false;
+  const next = steps.map((step) => {
+    if (
+      step?.status !== 'in_progress'
+      || (!step._isScratchpad && !step._isToolCall && !step._isReasoning)
+    ) {
+      return step;
+    }
+    changed = true;
+    return { ...step, status: 'completed', completedAt };
+  });
+  return changed ? next : steps;
+}
+
+/** Same but only acts on the trailing in-progress scratchpad — used
+ *  by scratchpad_done progress markers before the result event may
+ *  have arrived. */
 function closeOpenScratchpadStep(steps, completedAt) {
   if (steps.length === 0) return steps;
   const idx = steps.length - 1;
@@ -189,13 +208,13 @@ export function reduceStream(state, event, now = Date.now) {
   }
 
   if (type === 'response.completed') {
-    return { ...state, steps: closeOpenScratchpadStep(state.steps, now()), status: 'done' };
+    return { ...state, steps: closeOpenInspectableSteps(state.steps, eventTs), status: 'done' };
   }
 
   if (type === 'response.failed') {
     return {
       ...state,
-      steps: closeOpenScratchpadStep(state.steps, now()),
+      steps: closeOpenInspectableSteps(state.steps, eventTs),
       status: 'error',
       error: event.error || event.message || 'Response failed',
     };
@@ -206,7 +225,7 @@ export function reduceStream(state, event, now = Date.now) {
     if (!delta) return state;
     // Close any open reasoning step — the model has finished thinking
     // and is now producing the visible response.
-    const steps = closeReasoningStep(state.steps, now());
+    const steps = closeReasoningStep(state.steps, eventTs);
     return { ...state, status: 'streaming', bodyText: state.bodyText + delta, steps };
   }
 
@@ -331,6 +350,7 @@ export function reduceStream(state, event, now = Date.now) {
       output: null,
       result: null,
       _isScratchpad: false,
+      _isToolCall: true,
       _scratchpadTabId: null,
       _toolUseId: event.tool_use_id || null,
     };
@@ -379,8 +399,9 @@ export function reduceStream(state, event, now = Date.now) {
   if (role === 'thought.progress' && (event.subtype === 'reasoning' || event.subtype === 'thinking')) {
     const text = event.content || '';
     if (!text) return state;
-    // Find an existing reasoning step to append to.
-    const existingIdx = state.steps.findIndex((s) => s._isReasoning);
+    // Find the active reasoning step to append to. Closed reasoning
+    // steps belong to a previous phase and should stay immutable.
+    const existingIdx = state.steps.findIndex((s) => s._isReasoning && s.status === 'in_progress');
     if (existingIdx !== -1) {
       const existing = state.steps[existingIdx];
       const updated = state.steps.slice();

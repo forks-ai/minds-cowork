@@ -121,7 +121,7 @@ function PhaseRow({
 }
 
 export function PhaseProgress({ steps = [], streamStatus = null, conversationId = '', onActivateStep }) {
-  const scratchpadSteps = steps.filter((s) => s._isScratchpad);
+  const scratchpadSteps = steps.filter((s) => s._isScratchpad || s._isToolCall);
   const artifactSteps = steps.filter((s) => s.badge === 'Artifact');
   const isInFlight = streamStatus === 'thinking' || streamStatus === 'streaming';
   const isDone = streamStatus === 'done';

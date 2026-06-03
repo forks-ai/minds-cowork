@@ -479,6 +479,7 @@ function persistTurnState(cid, turnIndex, steps, startedAt) {
     result: s.result || null,
     stderr: s.stderr || null,
     _isScratchpad: !!s._isScratchpad,
+    _isToolCall: !!s._isToolCall,
     _scratchpadTabId: s._scratchpadTabId || null,
   }));
   map[turnIndex] = { steps: sanitized, startedAt: startedAt ?? null };
