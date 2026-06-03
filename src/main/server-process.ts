@@ -7,7 +7,7 @@
 // binary installed via `uv tool install cowork-server`. No bundled source
 // directory needed — the installer handles package installation.
 
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, execFile, ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
@@ -62,6 +62,25 @@ function killTree(proc: ChildProcess, signal: NodeJS.Signals): void {
     try { process.kill(-proc.pid, signal); return; } catch {}
   }
   try { proc.kill(signal); } catch {}
+}
+
+// Find and kill the process listening on a port. Used to reap orphaned
+// servers that we adopted but don't have a ChildProcess handle for.
+// Best-effort — failures are silently ignored.
+async function killProcessOnPort(port: number): Promise<void> {
+  if (process.platform === 'win32') return; // lsof not available
+  return new Promise<void>((resolve) => {
+    execFile('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { timeout: 3000 }, (err, stdout) => {
+      if (err || !stdout.trim()) { resolve(); return; }
+      for (const pidStr of stdout.trim().split('\n')) {
+        const pid = Number(pidStr);
+        if (pid > 0) {
+          try { process.kill(pid, 'SIGTERM'); } catch {}
+        }
+      }
+      resolve();
+    });
+  });
 }
 
 export function getServerPort(): number {
@@ -320,12 +339,15 @@ export async function stopServer(): Promise<void> {
   const proc = serverProcess;
   if (!proc) {
     serverStarted = false;
-    // Even with no live child, mark this as an intentional stop —
-    // a stopServer() call signals user/app intent, the absence of a
-    // child is just "already stopped." Keeps the modal from showing
-    // a stale "crashed" panel after the user re-clicked Stop on an
-    // already-stopped backend.
     lastStopIntentional = true;
+    // If we adopted an external server (no child handle), try to kill
+    // whatever is listening on the port so the next launch gets a clean
+    // slate. Without this, the orphan survives app quit and blocks the
+    // port indefinitely.
+    if (_adoptedExternal) {
+      _adoptedExternal = false;
+      await killProcessOnPort(serverPort);
+    }
     return;
   }
 
