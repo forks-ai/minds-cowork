@@ -201,13 +201,14 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
       );
 
       if (llmResult.ok) {
-        // Full Minds setup — LLM works
+        // Full Minds setup — LLM works.
+        // Do NOT copy the Minds key into ANTON_OPENAI_API_KEY — the server
+        // reads minds_api_key for the minds_cloud provider. Duplicating it
+        // into the OpenAI slot causes a phantom OpenAI card in Settings.
         const lines = [
           ...mindsLines,
-          `ANTON_OPENAI_API_KEY=${apiKey.trim()}`,
-          `ANTON_OPENAI_BASE_URL=${mindsBase}/v1`,
-          'ANTON_PLANNING_PROVIDER=openai-compatible',
-          'ANTON_CODING_PROVIDER=openai-compatible',
+          'ANTON_PLANNING_PROVIDER=minds-cloud',
+          'ANTON_CODING_PROVIDER=minds-cloud',
           'ANTON_PLANNING_MODEL=_reason_',
           'ANTON_CODING_MODEL=_code_',
         ];
