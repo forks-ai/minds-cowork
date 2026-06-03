@@ -366,7 +366,6 @@ function ActionsPopover({ open, anchorRect, onClose, items }) {
 }
 
 const BACKEND_ARTIFACT_TYPES = new Set(['fullstack-stateless-app', 'fullstack-stateful-app']);
-const NOT_PUBLISHABLE_REASON = "Publishing isn't supported for this artifact type";
 
 export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, onPublish: onRequestPublish }) {
   const actionPath = artifact?.canonicalPath || artifact?.file_path || artifact?.path || '';
@@ -374,7 +373,6 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
   const disabledReason = artifact?.actionDisabledReason || '';
   const hasActionPath = !!actionPath && !disabledReason;
   const isBackendArtifact = BACKEND_ARTIFACT_TYPES.has(artifact?.type);
-  const isPublishable = !isBackendArtifact;
   // Backend artifacts treat the folder, not the entry html, as the
   // "thing" the user opens in their OS or browser.
   const artifactFolder = actionPath.replace(/[\\/][^\\/]*$/, '') || actionPath;
@@ -469,6 +467,11 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
           if (cancelled) return;
           setPreviewUrl(iframeUrl);
           if (typeof port === 'number') setBackendPort(port);
+          // Fullstack apps publish from their root; the mount endpoint
+          // reports the published URL from `.published.json` so the
+          // "Published" pill / `public url` row persist across reopens
+          // (the artifact object from a chat bubble may not carry it).
+          if (serverPublishedUrl) setPublishedUrl(serverPublishedUrl);
           return;
         }
         if (!url) throw new Error('Preview mount returned no URL');
@@ -814,19 +817,15 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
             <button
               type="button"
               onClick={onPublish}
-              disabled={busy || !hasActionPath || !isPublishable}
-              title={
-                !isPublishable
-                  ? NOT_PUBLISHABLE_REASON
-                  : hasActionPath ? 'Publish' : disabledReason || 'No local artifact path'
-              }
+              disabled={busy || !hasActionPath}
+              title={hasActionPath ? 'Publish' : disabledReason || 'No local artifact path'}
               style={{
-                cursor: busy ? 'progress' : (hasActionPath && isPublishable) ? 'pointer' : 'not-allowed',
+                cursor: busy ? 'progress' : hasActionPath ? 'pointer' : 'not-allowed',
                 background: 'var(--accent)', border: '1px solid var(--accent)',
                 color: '#fff',
                 padding: '6px 12px', borderRadius: 8,
                 fontSize: 12.5, fontWeight: 600,
-                opacity: busy || !hasActionPath || !isPublishable ? 0.7 : 1,
+                opacity: busy || !hasActionPath ? 0.7 : 1,
               }}
             >
               {busy ? 'Publishing…' : 'Publish'}
@@ -888,8 +887,7 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
             {
               label: publishedUrl ? 'Unpublish' : 'Publish',
               icon: Ico.upload(13),
-              disabled: busy || !hasActionPath || (!publishedUrl && !isPublishable),
-              title: (!publishedUrl && !isPublishable) ? NOT_PUBLISHABLE_REASON : undefined,
+              disabled: busy || !hasActionPath,
               onClick: publishedUrl ? onUnpublish : onPublish,
             },
             ...(host.isWeb ? [] : [

@@ -929,6 +929,11 @@ async def preview_mount(req: PreviewMountRequest):
         # `proxyUrl` and goes through its own main-process forwarder.
         preview_proxy.set_artifact(artifact_root)
         proxy_url = preview_proxy.url_for(artifact_root) or ""
+        # Fullstack apps publish from the artifact root, with `.published.json`
+        # at the root keyed by the primary file name — the same shape the
+        # static branch and `list_artifacts` read via these helpers. Surface
+        # the published state so the viewer shows the "Published" pill and
+        # `public url` row for backend artifacts too.
         return {
             "kind": "proxy",
             "artifactDir": str(artifact_root),
@@ -936,6 +941,8 @@ async def preview_mount(req: PreviewMountRequest):
             "backendRunning": running,
             "launchError": "" if running else launch_detail,
             "proxyUrl": proxy_url,
+            "publishedUrl": _published_url_for(artifact_root, artifact),
+            **_published_access_for(artifact_root, artifact),
         }
 
     if artifact.suffix.lower() != ".html":

@@ -14,7 +14,13 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from .artifacts import _resolve_artifact_path, _scan_artifact_dirs
+from .artifacts import (
+    _artifact_root_for,
+    _load_metadata,
+    _published_url_for,
+    _resolve_artifact_path,
+    _scan_artifact_dirs,
+)
 from .cowork_state import backups_dir, load_state, save_state, utc_now_iso
 from .integrations import ensure_managed_integrations
 from .settings import _get_env, get_config_status
@@ -661,6 +667,46 @@ async def delete_datasource(engine: str, name: str):
     return {"status": "ok", "deleted": {"engine": engine, "name": name}}
 
 
+def _fullstack_types() -> frozenset[str]:
+    """The artifact types anton's publisher bundles as fullstack apps.
+
+    Imported lazily so the publish routes degrade to static-HTML-only
+    behavior if the anton package is unavailable, rather than 500ing.
+    """
+    try:
+        from anton.publisher import FULLSTACK_ARTIFACT_TYPES
+        return frozenset(FULLSTACK_ARTIFACT_TYPES)
+    except Exception:
+        return frozenset()
+
+
+def _titleize(name: str) -> str:
+    """Folder/file stem → a human title for the publish list."""
+    return name.replace("_", " ").replace("-", " ").title()
+
+
+def _resolve_publish_target(artifact: Path) -> tuple[Path, Path, bool]:
+    """Decide what to publish given a resolved artifact *file*.
+
+    Fullstack apps (metadata.json type ∈ FULLSTACK_ARTIFACT_TYPES) keep
+    their frontend in `static/`, so the resolved primary file is one level
+    below the artifact root. anton's `publish()` only bundles backend.py +
+    static/ + requirements.txt when handed the *directory*, so we publish
+    the artifact root and keep `.published.json` at the root (beside
+    metadata.json). Static HTML artifacts publish the single file with
+    `.published.json` in the file's own parent. Either way the map is keyed
+    by the primary file name (`artifact.name`) — matching how
+    `_published_url_for` / `list_artifacts` read it back.
+
+    Returns (publish_target, published_dir, is_fullstack).
+    """
+    artifact_root = _artifact_root_for(artifact)
+    meta = _load_metadata(artifact_root) if (artifact_root / "metadata.json").is_file() else None
+    if (meta or {}).get("type") in _fullstack_types():
+        return artifact_root, artifact_root, True
+    return artifact, artifact.parent, False
+
+
 def _html_artifacts() -> list[dict[str, Any]]:
     """List every HTML file under every project's `.anton/artifacts/` tree.
 
@@ -674,6 +720,8 @@ def _html_artifacts() -> list[dict[str, Any]]:
     """
     out = []
     seen = set()
+    seen_roots: set[str] = set()
+    fullstack_types = _fullstack_types()
     for art_root in _scan_artifact_dirs():
         if not art_root.exists():
             continue
@@ -681,19 +729,36 @@ def _html_artifacts() -> list[dict[str, Any]]:
             key = str(path.resolve())
             if key in seen:
                 continue
+
+            # Fullstack apps keep their pages inside `static/`. Surface
+            # them as a single entry per artifact root (titled by the
+            # root's metadata), not one row per page.
+            artifact_root = _artifact_root_for(path)
+            meta = _load_metadata(artifact_root) if (artifact_root / "metadata.json").is_file() else None
+            if (meta or {}).get("type") in fullstack_types:
+                root_key = str(artifact_root.resolve())
+                if root_key in seen_roots:
+                    continue
+                seen_roots.add(root_key)
+                primary = meta.get("primary") or ""
+                entry_path = (artifact_root / primary) if primary else path
+                if not entry_path.is_file():
+                    entry_path = path
+                seen.add(str(entry_path.resolve()))
+                out.append({
+                    "title": meta.get("name") or _titleize(artifact_root.name),
+                    "path": str(entry_path),
+                    "bytes": entry_path.stat().st_size if entry_path.is_file() else 0,
+                    "publishedUrl": _published_url_for(artifact_root, entry_path),
+                })
+                continue
+
             seen.add(key)
-            published_path = path.parent / ".published.json"
-            published = {}
-            if published_path.is_file():
-                try:
-                    published = json.loads(published_path.read_text(encoding="utf-8")).get(path.name, {})
-                except Exception:
-                    published = {}
             out.append({
-                "title": path.stem.replace("_", " ").replace("-", " ").title(),
+                "title": _titleize(path.stem),
                 "path": str(path),
                 "bytes": path.stat().st_size,
-                "publishedUrl": published.get("url", "") if isinstance(published, dict) else "",
+                "publishedUrl": _published_url_for(path.parent, path),
             })
     return out[:40]
 
@@ -725,7 +790,11 @@ async def publish_artifact(req: PublishRequest):
         raise HTTPException(status_code=400, detail="Configure ANTON_MINDS_API_KEY before publishing")
 
     artifact = _resolve_artifact_path(req.path)
-    if artifact.suffix.lower() != ".html":
+    # Fullstack apps publish the whole artifact directory (anton bundles
+    # backend.py + static/ + requirements.txt only when handed a dir);
+    # static HTML artifacts publish the single .html file.
+    publish_target, published_dir, is_fullstack = _resolve_publish_target(artifact)
+    if not is_fullstack and artifact.suffix.lower() != ".html":
         raise HTTPException(status_code=415, detail="Only HTML artifacts can be published")
 
     try:
@@ -733,7 +802,7 @@ async def publish_artifact(req: PublishRequest):
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Anton publisher is unavailable") from exc
 
-    published_json = artifact.parent / ".published.json"
+    published_json = published_dir / ".published.json"
     published_map: dict[str, Any] = {}
     if published_json.is_file():
         try:
@@ -754,7 +823,7 @@ async def publish_artifact(req: PublishRequest):
 
     try:
         result = publish(
-            artifact,
+            publish_target,
             api_key=api_key,
             report_id=report_id,
             publish_url=_get_env("ANTON_PUBLISH_URL", "https://4nton.ai"),
@@ -770,7 +839,7 @@ async def publish_artifact(req: PublishRequest):
     returned_report_id = result.get("report_id", "")
     if returned_report_id:
         history_item = {
-            "artifact": str(artifact),
+            "artifact": str(publish_target),
             "artifactName": artifact.name,
             "url": view_url,
             "reportId": returned_report_id,
@@ -816,7 +885,10 @@ async def unpublish_artifact(path: str = Query(..., description="Absolute path t
         raise HTTPException(status_code=400, detail="Configure ANTON_MINDS_API_KEY before unpublishing")
 
     artifact = _resolve_artifact_path(path)
-    published_json = artifact.parent / ".published.json"
+    # Mirror publish: fullstack artifacts keep `.published.json` at the
+    # artifact root (keyed, like static ones, by the primary file name).
+    _publish_target, published_dir, _is_fullstack = _resolve_publish_target(artifact)
+    published_json = published_dir / ".published.json"
     if not published_json.is_file():
         raise HTTPException(status_code=404, detail="Artifact has no publish record")
 
