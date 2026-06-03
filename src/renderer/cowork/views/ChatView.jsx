@@ -86,7 +86,6 @@ function MessageActions({ getText, onDelete }) {
   // Copy + delete for now — refresh / thumbs up / thumbs down hidden
   // until the underlying actions are wired.
   const [copied, setCopied] = useState(false);
-  const [deleteHover, setDeleteHover] = useState(false);
   const onCopy = async () => {
     const text = typeof getText === 'function' ? getText() : '';
     if (!text) return;
@@ -100,6 +99,7 @@ function MessageActions({ getText, onDelete }) {
     <div style={{ display: 'flex', gap: 4, marginTop: 4, color: T.ink4 }}>
       <button
         type="button"
+        className="hover-tint"
         title={copied ? 'Copied' : 'Copy response'}
         aria-label={copied ? 'Copied' : 'Copy response'}
         onClick={onCopy}
@@ -111,30 +111,25 @@ function MessageActions({ getText, onDelete }) {
           width: 26, height: 26, borderRadius: 6,
           display: 'grid', placeItems: 'center',
           color: copied ? 'var(--accent)' : 'inherit',
-          transition: 'color 140ms ease, background 140ms ease',
         }}
-        onMouseOver={(e) => { e.currentTarget.style.background = 'color-mix(in srgb, var(--ink) 10%, transparent)'; }}
-        onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; }}
       >
         {copied ? Ico.check(13) : Ico.copy(13)}
       </button>
       {onDelete && (
         <button
           type="button"
+          className="hover-tint hover-tint-danger"
           title="Delete this question and response"
           aria-label="Delete this question and response"
           onClick={onDelete}
-          onMouseEnter={() => setDeleteHover(true)}
-          onMouseLeave={() => setDeleteHover(false)}
           style={{
             cursor: 'pointer',
-            background: deleteHover ? 'color-mix(in srgb, var(--ink) 10%, transparent)' : 'transparent',
+            background: 'transparent',
             border: 0,
             padding: 0,
             width: 26, height: 26, borderRadius: 6,
             display: 'grid', placeItems: 'center',
-            color: deleteHover ? 'var(--danger)' : 'inherit',
-            transition: 'color 140ms ease, background 140ms ease',
+            color: 'inherit',
           }}
         >
           {Ico.trash(13)}

@@ -508,6 +508,13 @@ a[href],
 .icon-btn:hover { background: var(--stone-150); color: var(--text-strong); }
 .icon-btn.active { background: var(--stone-200); color: var(--text-strong); }
 
+/* Lightweight hover utilities for inline-styled buttons that only need
+   a tinted background on hover without a full component class. */
+.hover-tint { transition: background .12s, color .12s; }
+.hover-tint:hover { background: color-mix(in srgb, var(--ink) 10%, transparent); }
+.hover-tint-text:hover { color: var(--ink); }
+.hover-tint-danger:hover { color: var(--danger); }
+
 .kbd {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 18px; height: 18px; padding: 0 4px; border-radius: 4px;
