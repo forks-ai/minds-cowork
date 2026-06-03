@@ -334,6 +334,26 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
     setTimeout(onComplete, 800);
   };
 
+  // ── Success: show only the confirmation graphic, hide everything else ──
+  if (phase === 'success') {
+    return (
+      <div className="onboard-content-inner">
+        <div style={{
+          display: 'flex', flexDirection: 'column', alignItems: 'center',
+          gap: 14, padding: '48px 0',
+          animation: 'fadeInUp 0.4s ease-out both',
+        }}>
+          <OrbitMorph state="done" size={72} title="Connected" />
+          <span style={{
+            fontFamily: 'var(--font-mono)', fontSize: 11.5,
+            color: 'var(--accent, #7CC4B6)', letterSpacing: '0.10em',
+            textTransform: 'uppercase',
+          }}>Connected</span>
+        </div>
+      </div>
+    );
+  }
+
   // Step 2: BYOK LLM provider selection. Covers two entry points —
   //   1) `minds-no-llm` after a Minds validation succeeded but no LLM
   //      credits, or after the user clicked Skip MindsHub.
@@ -653,21 +673,6 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
             color: 'var(--text-muted)', letterSpacing: '0.10em',
             textTransform: 'uppercase',
           }}>Validating connection\u2026</span>
-        </div>
-      )}
-
-      {phase === 'success' && (
-        <div style={{
-          display: 'flex', flexDirection: 'column', alignItems: 'center',
-          gap: 14, padding: '20px 0 8px',
-          animation: 'fadeInUp 0.4s ease-out both',
-        }}>
-          <OrbitMorph state="done" size={64} title="Connected" />
-          <span style={{
-            fontFamily: 'var(--font-mono)', fontSize: 11.5,
-            color: 'var(--accent, #7CC4B6)', letterSpacing: '0.10em',
-            textTransform: 'uppercase',
-          }}>Connected</span>
         </div>
       )}
 
