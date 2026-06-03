@@ -808,7 +808,10 @@ function ProjectDetail({
   const kebabRef = useRef(null);
   const renameInputRef = useRef(null);
   const isReserved = project.name === 'general' || project.name === 'default';
-  const showKebab = titleHover || !!menuRect;
+  // In detail view, Open and Pin are hidden — the only remaining items
+  // are Rename (hidden when reserved) and Delete (disabled when reserved).
+  // Hide the kebab entirely so users don't see an empty/useless menu.
+  const showKebab = !isReserved && (titleHover || !!menuRect);
 
   // Focus + select-all the inline input on mount of the editing state.
   useEffect(() => {
