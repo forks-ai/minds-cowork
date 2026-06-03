@@ -151,6 +151,7 @@ export async function startServer(opts: { port?: number; readyTimeoutMs?: number
   // instead of spawning a second python that would clash on the port.
   if (pendingStart) return pendingStart;
 
+  // TODO: Remove ANTON_SERVER_PORT fallback once migration period is over
   serverPort = opts.port ?? (Number(process.env.COWORK_SERVER_PORT) || Number(process.env.ANTON_SERVER_PORT) || DEFAULT_PORT);
 
   // Pre-flight: somebody might already be on our port. The most

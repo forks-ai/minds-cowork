@@ -79,6 +79,34 @@ export function providerTypeToServerValue(value) {
 
 // ─── Static metadata ────────────────────────────────────────────────
 
+// Model options per provider. Single source of truth — Onboarding and
+// SettingsView both import from here. Each entry carries the model ID
+// and a human-readable label for dropdowns.
+export const PROVIDER_MODELS = {
+  'minds-cloud': [
+    { id: '_reason_', label: 'Reasoning' },
+    { id: '_code_', label: 'Coding' },
+  ],
+  anthropic: [
+    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
+    { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
+    { id: 'claude-opus-4-7', label: 'Claude Opus 4.7' },
+    { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
+  ],
+  openai: [
+    { id: 'gpt-5.4', label: 'GPT-5.4' },
+    { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
+    { id: 'o3', label: 'o3' },
+    { id: 'o4-mini', label: 'o4 Mini' },
+  ],
+  gemini: [
+    { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash' },
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+  ],
+  'openai-compatible': [],
+};
+
 export const STATIC_SETTINGS = {
   providerTypes: ['minds-cloud', 'anthropic', 'openai', 'gemini', 'openai-compatible'],
   providerTypeLabels: {
@@ -88,13 +116,10 @@ export const STATIC_SETTINGS = {
     gemini: 'Gemini',
     'openai-compatible': 'OpenAI-compatible',
   },
-  recommendedModels: {
-    'minds-cloud': ['_reason_', '_code_'],
-    anthropic: ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'],
-    openai: ['gpt-5.4', 'gpt-5.4-mini', 'o3', 'o4-mini'],
-    gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-3-flash-preview'],
-    'openai-compatible': [],
-  },
+  // Flat ID lists derived from PROVIDER_MODELS for places that only need IDs.
+  recommendedModels: Object.fromEntries(
+    Object.entries(PROVIDER_MODELS).map(([k, v]) => [k, v.map((m) => m.id)]),
+  ),
   recommendedPair: {
     'minds-cloud': ['_reason_', '_code_'],
     anthropic: ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],

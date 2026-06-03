@@ -1,30 +1,16 @@
 import { useState } from 'react';
 import { host } from '../platform/host';
 import { BASE } from '../cowork/api';
+import { PROVIDER_MODELS } from '../cowork/lib/settingsTransform';
 import OrbitMorph from '../cowork/components/ui/OrbitMorph';
 
 type Provider = 'minds' | 'byok';
 type ByokProvider = 'anthropic' | 'openai' | 'gemini' | 'openai-compatible';
 type Phase = 'choose' | 'validating' | 'minds-no-llm' | 'success' | 'error';
 
-const ANTHROPIC_MODELS = [
-  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
-  { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
-  { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
-];
-
-const OPENAI_MODELS = [
-  { id: 'gpt-5.4', label: 'GPT-5.4' },
-  { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
-  { id: 'o3', label: 'o3' },
-  { id: 'o4-mini', label: 'o4 Mini' },
-];
-
-const GEMINI_MODELS = [
-  { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash' },
-  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-  { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-];
+const ANTHROPIC_MODELS = PROVIDER_MODELS.anthropic;
+const OPENAI_MODELS = PROVIDER_MODELS.openai;
+const GEMINI_MODELS = PROVIDER_MODELS.gemini;
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
 const MINDS_REGISTER_URL = 'https://auth.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/registrations?client_id=public-client&response_type=code&scope=openid&redirect_uri=https%3A%2F%2Fconsole.mindshub.ai';

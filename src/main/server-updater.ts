@@ -110,7 +110,12 @@ function getInstalledVersion(uv: string): Promise<string | null> {
   });
 }
 
-/** Compare two PEP-440-ish version strings. Returns >0 if a > b. */
+/** Compare two PEP-440-ish version strings. Returns >0 if a > b.
+ *  NOTE: Only handles simple X.Y.Z numeric versions. Pre-release
+ *  suffixes (a1, b1, rc1, .dev1) and post-releases (.post1) are not
+ *  handled — they'll compare incorrectly. This is fine as long as
+ *  cowork-server only publishes simple numeric versions to PyPI. If
+ *  pre-releases are ever needed, upgrade to a proper PEP-440 parser. */
 function compareVersions(a: string, b: string): number {
   const pa = a.split('.').map(Number);
   const pb = b.split('.').map(Number);
