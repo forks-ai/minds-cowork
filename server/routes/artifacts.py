@@ -548,7 +548,7 @@ def _candidate_relative_artifacts(raw_path: str) -> list[Path]:
     return list(matches.values())
 
 
-def _resolve_artifact_path(raw_path: str) -> Path:
+def _resolve_artifact_path(raw_path: str, *, allow_dir: bool = False) -> Path:
     """Turn an artifact request path into an absolute path on disk.
 
     Accepts:
@@ -556,6 +556,12 @@ def _resolve_artifact_path(raw_path: str) -> Path:
       - Relative paths anchored at any artifact root (slug-prefixed, or
         with a leading `artifacts/` / `.anton/artifacts/`).
     Path-traversal guarded; non-existent files yield 404.
+
+    When `allow_dir` is set, an absolute path that resolves to an artifact
+    *root directory* (one carrying `metadata.json`) is also accepted — used
+    by publish/unpublish so a folder-based artifact can be addressed by its
+    folder. The relative-path branch stays file-only (the client always
+    sends absolute folder paths).
     """
     # Reject null bytes, which are used in path injection attacks.
     if "\x00" in raw_path:
@@ -578,6 +584,8 @@ def _resolve_artifact_path(raw_path: str) -> Path:
             except ValueError:
                 continue
             if resolved.is_file():
+                return resolved
+            if allow_dir and resolved.is_dir() and (resolved / "metadata.json").is_file():
                 return resolved
         raise HTTPException(status_code=404, detail="Artifact is not in a known artifacts directory")
 

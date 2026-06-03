@@ -13,9 +13,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Ico from '../components/Icons';
 import {
-  openArtifact, revealArtifact,
-  publishArtifact, unpublishArtifact,
-  artifactServeUrl, openArtifactFile,
+  revealArtifact, publishArtifact, unpublishArtifact,
+  publishTargetPath, artifactServeUrl, openArtifactFile,
 } from '../api';
 import { copyText } from '../lib/clipboard';
 import { Modal, ModalHeader, ModalBody, ModalFooter } from '../components/ui/Modal';
@@ -1252,7 +1251,7 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
     if (!artifact?.path || busyPaths.has(artifact.path)) return;
     setBusy(artifact.path, true);
     try {
-      const r = await publishArtifact(artifact.path, password || undefined);
+      const r = await publishArtifact(publishTargetPath(artifact), password || undefined);
       if (r?.url) {
         updateOne({
           ...artifact,
@@ -1283,7 +1282,7 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
     if (!artifact?.path || busyPaths.has(artifact.path)) return;
     setBusy(artifact.path, true);
     try {
-      await unpublishArtifact(artifact.path);
+      await unpublishArtifact(publishTargetPath(artifact));
       updateOne({ ...artifact, publishedUrl: '' });
       setToast({ kind: 'ok', message: 'Unpublished from MindsHub.' });
     } catch (e) {

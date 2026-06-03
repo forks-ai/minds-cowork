@@ -11,6 +11,7 @@ import {
   previewArtifact,
   publishArtifact,
   unpublishArtifact,
+  publishTargetPath,
 } from '../../api';
 import { copyText } from '../../lib/clipboard';
 import { Modal } from '../ui/Modal';
@@ -525,7 +526,7 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
     }
     setBusy(true);
     try {
-      const r = await publishArtifact(actionPath);
+      const r = await publishArtifact(publishTargetPath(artifact));
       if (r?.url) {
         setPublishedUrl(r.url);
         onChange?.({ ...artifact, publishedUrl: r.url });
@@ -544,7 +545,7 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
     }
     setBusy(true);
     try {
-      await unpublishArtifact(actionPath);
+      await unpublishArtifact(publishTargetPath(artifact));
       setPublishedUrl('');
       onChange?.({ ...artifact, publishedUrl: '' });
     } catch (e) {

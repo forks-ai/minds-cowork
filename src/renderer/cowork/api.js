@@ -1162,6 +1162,17 @@ export async function publishArtifact(path, password) {
   return req('/publish', { method: 'POST', body: JSON.stringify(body) });
 }
 
+// The path to send to publish/unpublish for an artifact. Prefer the
+// artifact *folder* so folder-based artifacts publish as a unit — the
+// server resolves the primary file for static artifacts and treats
+// fullstack apps as a directory. Legacy loose-HTML and chat-bubble
+// artifacts carry no `folder`, so fall back to the primary file path
+// (the server then climbs to the artifact root itself).
+export function publishTargetPath(artifact) {
+  return artifact?.folder
+    || artifact?.canonicalPath || artifact?.file_path || artifact?.path || '';
+}
+
 export async function fetchBrowseStatus() {
   return req('/browse/status');
 }
