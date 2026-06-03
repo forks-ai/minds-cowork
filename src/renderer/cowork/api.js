@@ -1050,14 +1050,19 @@ export async function fetchDatasources() {
   return { connections: Array.isArray(data) ? data : [] };
 }
 
-// Legacy manual-form save — the real save flow goes through
-// streamDataVaultSubmission → POST /connectors/submissions.
-// These stubs match what the server used to return.
+// DEPRECATED: Legacy manual-form save — the real save flow now goes through
+// streamDataVaultSubmission → POST /connectors/submissions. The old
+// POST /datasources and POST /datasources/validate endpoints no longer
+// exist on the server. These stubs exist only because UtilitiesView's
+// retired ConnectView still imports them; they are unreachable in the
+// current routing. Remove when ConnectView is fully deleted.
 export async function saveDatasource(_payload) {
+  console.warn('saveDatasource() is deprecated — use streamDataVaultSubmission instead');
   return { ok: true };
 }
 
 export async function validateDatasource(_payload) {
+  console.warn('validateDatasource() is deprecated — use streamDataVaultSubmission instead');
   return { valid: true };
 }
 

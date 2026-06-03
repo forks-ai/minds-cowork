@@ -384,7 +384,7 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
               maxWidth: 456, textAlign: 'left',
             }}>
               {skippedMinds
-                ? 'You skipped MindsHub. Pick an LLM provider for Anton to use. You can add MindsHub later from Settings → Providers — it\'s required to publish artifacts to the web.'
+                ? 'You skipped MindsHub. Pick an LLM provider for the agent to use. You can add MindsHub later from Settings → Providers — it\'s required to publish artifacts to the web.'
                 : 'Your MindsHub API key is valid and saved for publishing and data connectors. However, you don\'t seem to have LLM credits. Top up your balance or pick an LLM provider below.'}
             </div>
 

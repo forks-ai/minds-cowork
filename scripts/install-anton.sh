@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Install the Anton Python package inside a Docker build.
+# DEPRECATED: This script installs the legacy anton-agent package.
+# For Docker builds, use install-cowork-server.sh instead.
+# For local development, use `uv run cowork-server` from the
+# cowork-server directory.
 #
 # Installs anton-agent from PyPI (the mindsdb/anton package, published
 # under the name "anton-agent" because "anton" was taken on PyPI).
