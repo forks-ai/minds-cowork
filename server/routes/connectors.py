@@ -612,8 +612,9 @@ def connector_oauth_callback(
         return _fail(f"Token exchange failed ({exc.code}): {raw[:300]}")
     except URLError:
         return _fail("Could not reach the provider's token endpoint.")
-    except Exception as exc:  # noqa: BLE001
-        return _fail(f"Token exchange error: {exc}")
+    except Exception:  # noqa: BLE001
+        logger.exception("connector oauth token exchange failed")
+        return _fail("Token exchange failed due to an internal error.")
 
     access_token = str(token_data.get("access_token") or "").strip()
     refresh_token = str(token_data.get("refresh_token") or "").strip()
@@ -641,9 +642,9 @@ def connector_oauth_callback(
         )
     except HTTPException as exc:
         return _fail(str(exc.detail))
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         logger.exception("connector oauth persist failed")
-        return _fail(f"Could not save the connection: {exc}")
+        return _fail("Could not save the connection due to an internal error.")
 
     pending["status"] = "success"
     pending["result_name"] = saved_name
