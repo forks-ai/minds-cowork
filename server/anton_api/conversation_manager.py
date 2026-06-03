@@ -1192,7 +1192,7 @@ async def _build_chat_session(
         system_prompt_context=SystemPromptContext(
             runtime_context=build_runtime_context(settings),
             suffix=(
-                "The Anton CoWork desktop UI displays progress, tool usage, and actions "
+                "The Anton Cowork desktop UI displays progress, tool usage, and actions "
                 "as separate structured activity rows. Keep assistant text focused on the "
                 "user-facing answer; do not narrate internal work with status phrases like "
                 "\"I'll check\", \"let me query\", or \"I have access\" unless that wording "
@@ -1208,10 +1208,10 @@ async def _build_chat_session(
         initial_history=initial_history,
         history_store=history_store,
         session_id=conversation_id,
-        # Tag every LLM trace emitted by anton-core (langfuse) with the
-        # cowork harness identity so child tool-call spans are filterable
-        # in the langfuse UI by source.
-        harness="cowork",
+        # NOTE: `harness="cowork"` was removed here — the installed
+        # anton-core ChatSessionConfig (2.26.5.13.1) has no `harness`
+        # field, so passing it raised TypeError and every task send 500'd.
+        # Re-add once anton-core's ChatSessionConfig supports it.
         proactive_dashboards=settings.proactive_dashboards,
         tools=[
             CONNECT_DATASOURCE_TOOL,
@@ -1562,9 +1562,12 @@ async def _produce_turn(
     nonlocal_session: dict[str, Any] = {"s": session}
 
     async def _drain(prompt: str) -> None:
-        # `turn_id` is forwarded so anton-core can stamp the LLM trace +
-        # child spans with the per-turn identifier for langfuse.
-        async for event in nonlocal_session["s"].turn_stream(prompt, turn_id=turn_index):
+        # NOTE: `turn_id=turn_index` was removed from this call — the
+        # installed anton-core ChatSession.turn_stream() (2.26.5.13.1)
+        # accepts only (user_input), so passing turn_id raised TypeError
+        # and the turn failed. Re-add once anton-core's turn_stream
+        # supports it (paired with the `harness` arg in _build_chat_session).
+        async for event in nonlocal_session["s"].turn_stream(prompt):
             _write_event(event)
 
     try:

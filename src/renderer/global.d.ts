@@ -70,6 +70,8 @@ interface AntonTronAPI {
 }
 
 declare global {
+  /** Injected by Vite at build time from package.json `version`. */
+  const __APP_VERSION__: string;
   interface Window {
     antontron: AntonTronAPI;
   }

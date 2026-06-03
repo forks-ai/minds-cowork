@@ -1,4 +1,4 @@
-"""Curated integration catalogue for Anton CoWork."""
+"""Curated integration catalogue for Anton Cowork."""
 
 from __future__ import annotations
 
@@ -27,17 +27,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-MANAGED_BEGIN = "# >>> Anton CoWork managed integrations >>>"
-MANAGED_END = "# <<< Anton CoWork managed integrations <<<"
+MANAGED_BEGIN = "# >>> Anton Cowork managed integrations >>>"
+MANAGED_END = "# <<< Anton Cowork managed integrations <<<"
 USER_DATASOURCES_PATH = Path.home() / ".anton" / "datasources.md"
 GOOGLE_DRIVE_ENGINE = "google_drive"
 GOOGLE_DRIVE_OAUTH_SCOPES = (
     "openid",
     "email",
     "profile",
-    "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/drive.file",
-    "https://www.googleapis.com/auth/drive",
 )
 GOOGLE_OAUTH_STATE_KEY = "google_drive_oauth"
 
@@ -57,9 +55,11 @@ GMAIL_OAUTH_SCOPES = (
     "openid",
     "email",
     "profile",
+    "https://www.googleapis.com/auth/gmail.labels",
+    "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.compose",
-    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.metadata",
 )
 GMAIL_OAUTH_STATE_KEY = "gmail_oauth"
 
@@ -153,14 +153,39 @@ GOOGLE_CALENDAR_BLOCK = dedent(
     display_name: Google Calendar
     pip: google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib
     popular: true
-    fields:
-      - { name: access_token, required: false, secret: true, description: "OAuth access token (managed by Anton)" }
+    auth_method: choice
+    auth_methods:
+      - name: oauth
+        display: OAuth (managed by Anton)
+        fields:
+          - { name: access_token, required: false, secret: true, description: "OAuth access token (managed by Anton)" }
+      - name: service-account
+        display: Service account (Workspace)
+        fields:
+          - { name: service_account_json, required: true, secret: true, description: "Service account JSON key file contents (paste the full file)" }
+          - { name: impersonate_email, required: true, secret: false, description: "Workspace user to impersonate via domain-wide delegation" }
     test_snippet: |
       import os
-      from google.oauth2.credentials import Credentials
+      import json
       from googleapiclient.discovery import build
 
-      creds = Credentials(token=os.environ.get('DS_ACCESS_TOKEN', ''))
+      service_account_json = os.environ.get('DS_SERVICE_ACCOUNT_JSON', '').strip()
+      impersonate_email = os.environ.get('DS_IMPERSONATE_EMAIL', '').strip()
+      access_token = os.environ.get('DS_ACCESS_TOKEN', '').strip()
+
+      if service_account_json and impersonate_email:
+          from google.oauth2 import service_account
+          info = json.loads(service_account_json)
+          creds = service_account.Credentials.from_service_account_info(
+              info,
+              scopes=['https://www.googleapis.com/auth/calendar'],
+          ).with_subject(impersonate_email)
+      elif access_token:
+          from google.oauth2.credentials import Credentials
+          creds = Credentials(token=access_token)
+      else:
+          raise RuntimeError('No valid Google Calendar credentials found')
+
       service = build('calendar', 'v3', credentials=creds, cache_discovery=False)
       result = service.calendarList().list(maxResults=1).execute()
       print('ok — calendars:', len(result.get('items', [])))
@@ -847,14 +872,14 @@ async def google_drive_oauth_callback(
         _clear_google_oauth_pending(lastError=f"Google sign-in returned: {error}", lastErrorAt=_iso_now())
         return _callback_page(
             "Google Drive connection was cancelled",
-            "You can return to Anton CoWork and try the connection again whenever you are ready.",
+            "You can return to Anton Cowork and try the connection again whenever you are ready.",
             success=False,
         )
 
     if not pending:
         return _callback_page(
             "Google Drive sign-in expired",
-            "Anton CoWork could not find a pending Google Drive sign-in request. Start the connection again from Customize.",
+            "Anton Cowork could not find a pending Google Drive sign-in request. Start the connection again from Customize.",
             success=False,
         )
 
@@ -863,7 +888,7 @@ async def google_drive_oauth_callback(
         _clear_google_oauth_pending(lastError="Google sign-in state did not match the pending request.", lastErrorAt=_iso_now())
         return _callback_page(
             "Google Drive connection could not be verified",
-            "Anton CoWork rejected the callback because the Google sign-in state did not match.",
+            "Anton Cowork rejected the callback because the Google sign-in state did not match.",
             success=False,
         )
 
@@ -871,7 +896,7 @@ async def google_drive_oauth_callback(
         _clear_google_oauth_pending(lastError="Google sign-in did not return an authorization code.", lastErrorAt=_iso_now())
         return _callback_page(
             "Google Drive connection could not be completed",
-            "Google did not return an authorization code to Anton CoWork.",
+            "Google did not return an authorization code to Anton Cowork.",
             success=False,
         )
 
@@ -950,21 +975,21 @@ async def google_drive_oauth_callback(
         _clear_google_oauth_pending(lastError=str(exc.detail), lastErrorAt=_iso_now())
         return _callback_page(
             "Google Drive connection failed",
-            "An error occurred during the Google Drive sign-in flow. Return to Anton CoWork and try again.",
+            "An error occurred during the Google Drive sign-in flow. Return to Anton Cowork and try again.",
             success=False,
         )
     except Exception as exc:
         _clear_google_oauth_pending(lastError=str(exc), lastErrorAt=_iso_now())
         return _callback_page(
             "Google Drive connection failed",
-            "Anton CoWork could not finish the Google sign-in flow.",
+            "Anton Cowork could not finish the Google sign-in flow.",
             success=False,
         )
 
     _clear_google_oauth_pending(lastError="", lastErrorAt="", lastSuccessAt=_iso_now())
     return _callback_page(
         "Google Drive connected",
-        f"{account_name or account_email or 'Your Google account'} is now connected. You can close this tab and return to Anton CoWork.",
+        f"{account_name or account_email or 'Your Google account'} is now connected. You can close this tab and return to Anton Cowork.",
         success=True,
     )
 
@@ -1028,14 +1053,14 @@ async def google_calendar_oauth_callback(
         _clear_google_calendar_oauth_pending(lastError=f"Google sign-in returned: {error}", lastErrorAt=_iso_now())
         return _callback_page(
             "Google Calendar connection was cancelled",
-            "You can return to Anton CoWork and try the connection again whenever you are ready.",
+            "You can return to Anton Cowork and try the connection again whenever you are ready.",
             success=False,
         )
 
     if not pending:
         return _callback_page(
             "Google Calendar sign-in expired",
-            "Anton CoWork could not find a pending Google Calendar sign-in request. Start the connection again from Customize.",
+            "Anton Cowork could not find a pending Google Calendar sign-in request. Start the connection again from Customize.",
             success=False,
         )
 
@@ -1044,7 +1069,7 @@ async def google_calendar_oauth_callback(
         _clear_google_calendar_oauth_pending(lastError="Google sign-in state did not match.", lastErrorAt=_iso_now())
         return _callback_page(
             "Google Calendar connection could not be verified",
-            "Anton CoWork rejected the callback because the Google sign-in state did not match.",
+            "Anton Cowork rejected the callback because the Google sign-in state did not match.",
             success=False,
         )
 
@@ -1052,7 +1077,7 @@ async def google_calendar_oauth_callback(
         _clear_google_calendar_oauth_pending(lastError="Google sign-in did not return an authorization code.", lastErrorAt=_iso_now())
         return _callback_page(
             "Google Calendar connection could not be completed",
-            "Google did not return an authorization code to Anton CoWork.",
+            "Google did not return an authorization code to Anton Cowork.",
             success=False,
         )
 
@@ -1131,7 +1156,7 @@ async def google_calendar_oauth_callback(
         _clear_google_calendar_oauth_pending(lastError=str(exc.detail), lastErrorAt=_iso_now())
         return _callback_page(
             "Google Calendar connection failed",
-            "An error occurred during the Google Calendar sign-in flow. Return to Anton CoWork and try again.",
+            "An error occurred during the Google Calendar sign-in flow. Return to Anton Cowork and try again.",
             success=False,
         )
     except Exception as exc:
@@ -1139,14 +1164,14 @@ async def google_calendar_oauth_callback(
         _clear_google_calendar_oauth_pending(lastError=str(exc), lastErrorAt=_iso_now())
         return _callback_page(
             "Google Calendar connection failed",
-            "Anton CoWork could not finish the Google sign-in flow.",
+            "Anton Cowork could not finish the Google sign-in flow.",
             success=False,
         )
 
     _clear_google_calendar_oauth_pending(lastError="", lastErrorAt="", lastSuccessAt=_iso_now())
     return _callback_page(
         "Google Calendar connected",
-        f"{account_name or account_email or 'Your Google account'} is now connected. You can close this tab and return to Anton CoWork.",
+        f"{account_name or account_email or 'Your Google account'} is now connected. You can close this tab and return to Anton Cowork.",
         success=True,
     )
 
@@ -1309,14 +1334,14 @@ async def gmail_oauth_callback(
         _clear_gmail_oauth_pending(lastError=f"Google sign-in returned: {error}", lastErrorAt=_iso_now())
         return _callback_page(
             "Gmail connection was cancelled",
-            "You can return to Anton CoWork and try the connection again whenever you are ready.",
+            "You can return to Anton Cowork and try the connection again whenever you are ready.",
             success=False,
         )
 
     if not pending:
         return _callback_page(
             "Gmail sign-in expired",
-            "Anton CoWork could not find a pending Gmail sign-in request. Start the connection again from Customize.",
+            "Anton Cowork could not find a pending Gmail sign-in request. Start the connection again from Customize.",
             success=False,
         )
 
@@ -1325,7 +1350,7 @@ async def gmail_oauth_callback(
         _clear_gmail_oauth_pending(lastError="Google sign-in state did not match.", lastErrorAt=_iso_now())
         return _callback_page(
             "Gmail connection could not be verified",
-            "Anton CoWork rejected the callback because the Google sign-in state did not match.",
+            "Anton Cowork rejected the callback because the Google sign-in state did not match.",
             success=False,
         )
 
@@ -1333,7 +1358,7 @@ async def gmail_oauth_callback(
         _clear_gmail_oauth_pending(lastError="Google sign-in did not return an authorization code.", lastErrorAt=_iso_now())
         return _callback_page(
             "Gmail connection could not be completed",
-            "Google did not return an authorization code to Anton CoWork.",
+            "Google did not return an authorization code to Anton Cowork.",
             success=False,
         )
 
@@ -1412,21 +1437,21 @@ async def gmail_oauth_callback(
         _clear_gmail_oauth_pending(lastError=str(exc.detail), lastErrorAt=_iso_now())
         return _callback_page(
             "Gmail connection failed",
-            "An error occurred during the Gmail sign-in flow. Return to Anton CoWork and try again.",
+            "An error occurred during the Gmail sign-in flow. Return to Anton Cowork and try again.",
             success=False,
         )
     except Exception as exc:
         _clear_gmail_oauth_pending(lastError=str(exc), lastErrorAt=_iso_now())
         return _callback_page(
             "Gmail connection failed",
-            "Anton CoWork could not finish the Gmail sign-in flow.",
+            "Anton Cowork could not finish the Gmail sign-in flow.",
             success=False,
         )
 
     _clear_gmail_oauth_pending(lastError="", lastErrorAt="", lastSuccessAt=_iso_now())
     return _callback_page(
         "Gmail connected",
-        f"{account_name or account_email or 'Your Google account'} is now connected. You can close this tab and return to Anton CoWork.",
+        f"{account_name or account_email or 'Your Google account'} is now connected. You can close this tab and return to Anton Cowork.",
         success=True,
     )
 
@@ -1529,10 +1554,17 @@ def _google_ads_integration_item(vault) -> dict[str, Any]:
 
 
 @router.post("/google-ads/oauth/start")
-async def start_google_ads_oauth():
+async def start_google_ads_oauth(body: dict = None):
     oauth_config = _google_ads_oauth_config()
     if not oauth_config["ready"]:
         raise HTTPException(status_code=400, detail=str(oauth_config["error"]))
+
+    body = body or {}
+    developer_token = str(body.get("developer_token", "")).strip()
+    login_customer_id = str(body.get("login_customer_id", "")).strip()
+
+    if not developer_token:
+        raise HTTPException(status_code=400, detail="developer_token is required")
 
     verifier = _pkce_verifier()
     challenge = _pkce_challenge(verifier)
@@ -1541,7 +1573,14 @@ async def start_google_ads_oauth():
     redirect_uri = _google_ads_redirect_uri()
 
     _write_google_ads_oauth_meta(
-        pending={"state": state, "verifier": verifier, "redirectUri": redirect_uri, "startedAt": started_at},
+        pending={
+            "state": state,
+            "verifier": verifier,
+            "redirectUri": redirect_uri,
+            "startedAt": started_at,
+            "developerToken": developer_token,
+            "loginCustomerId": login_customer_id,
+        },
         lastError="",
         lastErrorAt="",
     )
@@ -1630,7 +1669,13 @@ async def google_ads_oauth_callback(
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Anton data vault is unavailable") from exc
 
-        LocalDataVault().save(GOOGLE_ADS_ENGINE, connection_name, {
+        developer_token = str(pending.get("developerToken", "")).strip()
+        login_customer_id = str(pending.get("loginCustomerId", "")).strip()
+
+        if not developer_token:
+            raise HTTPException(status_code=400, detail="developer_token is required")
+
+        vault_entry = {
             "auth_type": "oauth",
             "access_token": access_token,
             "refresh_token": str(token_data.get("refresh_token", "")).strip(),
@@ -1639,7 +1684,12 @@ async def google_ads_oauth_callback(
             "expires_at": expires_at,
             "account_email": account_email,
             "account_name": account_name,
-        })
+        }
+        if developer_token:
+            vault_entry["developer_token"] = developer_token
+        if login_customer_id:
+            vault_entry["login_customer_id"] = login_customer_id
+        LocalDataVault().save(GOOGLE_ADS_ENGINE, connection_name, vault_entry)
     except HTTPException as exc:
         _clear_google_ads_oauth_pending(lastError=str(exc.detail), lastErrorAt=_iso_now())
         return _callback_page("Google Ads connection failed", "An error occurred. Return to Anton CoWork and try again.", success=False)
