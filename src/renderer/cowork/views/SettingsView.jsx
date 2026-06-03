@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef, useId } from 'react';
 import Ico from '../components/Icons';
 import { validateSettings, revealSettingKey, testProviders } from '../api';
+import { providerTypeToKeyField, providerValueToType } from '../lib/settingsTransform';
 
-// Provider preset → underlying canonical fields. The backend only knows
-// three providers (anthropic / openai / openai-compatible). Gemini and
-// Minds Cloud are presets that translate to openai-compatible + a known
-// base URL on save, and are recognized back from those values on load.
+// Provider preset → underlying canonical fields. The Settings UI uses
+// hyphenated provider types; the API layer translates those to the
+// server's enum values when saving.
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
 const MINDS_API_PATH_SUFFIX = '/v1';
 
@@ -155,14 +155,15 @@ function applyProviderPreset(preset, settings, setSetting) {
       setSetting('openaiBaseUrl', '');
     }
   } else if (preset === 'minds-cloud') {
-    setSetting('planningProvider', 'minds_cloud');
-    setSetting('codingProvider', 'minds_cloud');
+    setSetting('planningProvider', 'minds-cloud');
+    setSetting('codingProvider', 'minds-cloud');
     const mindsUrl = (settings.mindsUrl || 'https://api.mindshub.ai').replace(/\/+$/, '');
     setSetting('mindsUrl', mindsUrl);
     setSetting('openaiBaseUrl', `${mindsUrl}${MINDS_API_PATH_SUFFIX}`);
-    if (settings.mindsApiKey && !settings.openaiApiKey) {
-      setSetting('openaiApiKey', settings.mindsApiKey);
-    }
+    // The server's build_llm_client reads minds_api_key (not
+    // openai_api_key) for the minds_cloud provider, so we no longer
+    // copy the Minds key into the OpenAI slot — that would clobber
+    // any real OpenAI key the user configures separately.
   }
 
   // 2. Reset planning + coding models to the new provider's defaults so
@@ -732,21 +733,50 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
     (t) => !providers.some((p) => p.type === t),
   );
 
+  const roleOverride = (role) => {
+    if (modelMode !== 'custom') return null;
+    const override = overrides[role];
+    if (!override || typeof override !== 'object') return null;
+    return { ...override, providerType: providerValueToType(override.providerType) };
+  };
+  const canonicalProviderForRole = (role) => providerValueToType(
+    role === 'planning' ? settings.planningProvider : settings.codingProvider,
+  ) || 'minds-cloud';
+  const canonicalModelForRole = (role) => {
+    if (role === 'planning') return settings.planningModel ?? settings.defaultModel ?? '';
+    return settings.codingModel ?? '';
+  };
+  const roleProviderType = (role) => roleOverride(role)?.providerType || canonicalProviderForRole(role);
+  const roleModelValue = (role, fallback = '') => {
+    const override = roleOverride(role);
+    if (override && Object.prototype.hasOwnProperty.call(override, 'model')) {
+      return override.model || '';
+    }
+    return canonicalModelForRole(role) || fallback || '';
+  };
+  const setRoleDriver = (role, providerType, model) => {
+    const normalizedType = providerValueToType(providerType) || 'minds-cloud';
+    const nextModel = model || '';
+    if (role === 'planning') {
+      setSetting('planningProvider', normalizedType);
+      setSetting('planningModel', nextModel);
+      setSetting('defaultModel', nextModel);
+    } else {
+      setSetting('codingProvider', normalizedType);
+      setSetting('codingModel', nextModel);
+    }
+  };
+
   // Which provider types actually drive planning + coding right now.
   // Planning and coding can pick *different* providers, so the active
-  // set is the union of both roles. A role with no explicit override
-  // implicitly falls back to MindsHub (matches the server's
-  // _resolve_role logic) — include that in the set so the test still
-  // pings it. Used by the per-row dot, runProviderTests, and the
-  // banner's effective-ready calculation.
+  // set is the union of both roles. A custom override wins, otherwise
+  // the canonical planning/coding settings are the source of truth.
+  // Used by the per-row dot, runProviderTests, and the banner's
+  // effective-ready calculation.
   const activeProviderTypes = (() => {
     const types = new Set();
-    if (modelMode === 'custom') {
-      types.add(overrides.planning?.providerType || 'minds-cloud');
-      types.add(overrides.coding?.providerType   || 'minds-cloud');
-    } else {
-      types.add('minds-cloud');
-    }
+    types.add(roleProviderType('planning'));
+    types.add(roleProviderType('coding'));
     return types;
   })();
 
@@ -787,6 +817,17 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
   const updateProviderField = (type, key, value) => {
     setLlmDirty(true);
     updateProviders(providers.map((p) => (p.type === type ? { ...p, [key]: value } : p)));
+    // Sync provider card API keys to the individual settings so both
+    // stay in sync. Without this, the providers JSON blob gets the new
+    // key but the individual openai_api_key / anthropic_api_key /
+    // minds_api_key setting stays stale.
+    if (key === 'apiKey' && value !== '***') {
+      const settingKey = providerTypeToKeyField(type);
+      if (settingKey) setSetting(settingKey, value);
+    }
+    if (key === 'baseUrl' && (type === 'openai-compatible' || type === 'gemini')) {
+      setSetting('openaiBaseUrl', value);
+    }
   };
   const addProviderOfType = (type) => {
     if (providers.some((p) => p.type === type)) return;
@@ -801,19 +842,18 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
     setLlmDirty(true);
     const next = providers.filter((p) => p.type !== type);
 
-    // Role overrides referencing the removed provider get re-pointed
-    // at MindsHub (the implicit fallback) with its recommended pair
-    // for the role.
+    // Role settings referencing the removed provider get re-pointed
+    // at MindsHub with its recommended pair for the role.
     const adjustedOverrides = {};
     for (const role of ['planning', 'coding']) {
-      const o = overrides[role];
-      if (!o) continue;
-      if (o.providerType === type) {
+      const o = roleOverride(role);
+      if (roleProviderType(role) === type) {
         const pair = recommendedPair['minds-cloud'] || ['', ''];
         const fallback = pair[role === 'planning' ? 0 : 1] || (recommendedModels['minds-cloud']?.[0] || '');
         adjustedOverrides[role] = { providerType: 'minds-cloud', model: fallback };
+        setRoleDriver(role, 'minds-cloud', fallback);
       } else {
-        adjustedOverrides[role] = o;
+        if (o) adjustedOverrides[role] = o;
       }
     }
     setSetting('modelOverrides', adjustedOverrides);
@@ -821,8 +861,8 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
   };
 
   // Tests only the providers currently driving the planning + coding
-  // roles. Each role contributes its driver (its override, or MindsHub
-  // when there's no override), so if planning picks Anthropic and
+  // roles. Each role contributes its driver (its custom override, or
+  // the canonical role setting), so if planning picks Anthropic and
   // coding picks OpenAI, both get pinged. Inactive registered
   // providers keep their previous status (no point hammering OpenAI
   // when the user isn't using it). Sends the active providers' live
@@ -1323,9 +1363,11 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
 
             <CollapsibleGroup title="Agent Models">
               {(() => {
-                // MindsHub is the implicit fallback for any role that
-                // hasn't been explicitly assigned an override.
-                const defaultProvider = providers.find((p) => p.type === 'minds-cloud') || providers[0];
+                // The backend-facing planning/coding fields are the
+                // fallback for any role without a custom override.
+                const defaultProvider = providers.find((p) => p.type === roleProviderType('planning'))
+                  || providers.find((p) => p.type === 'minds-cloud')
+                  || providers[0];
                 const multipleProviders = providers.length > 1;
 
                 // For each role: render provider selector (when N>1) +
@@ -1334,17 +1376,21 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
                 // for the role. Empty overrides fall back to the default
                 // provider's recommended pair.
                 const RoleRow = ({ role, label }) => {
-                  const cur = overrides[role] || {};
-                  const curType = cur.providerType || (defaultProvider?.type || '');
+                  const cur = roleOverride(role) || {};
+                  const curType = roleProviderType(role) || (defaultProvider?.type || '');
                   const fallbackPair = recommendedPair[curType] || ['', ''];
                   const fallbackModel = fallbackPair[role === 'planning' ? 0 : 1] || '';
-                  const curModel = cur.model || fallbackModel;
+                  const curModel = roleModelValue(role, fallbackModel);
                   const provider = providers.find((p) => p.type === curType);
                   const modelList = recommendedModels[curType] || [];
 
                   const writeOverride = (next) => {
+                    const providerType = providerValueToType(next.providerType || curType) || 'minds-cloud';
+                    const model = next.model || '';
+                    const normalized = { providerType, model };
                     setLlmDirty(true);
-                    setSetting('modelOverrides', { ...overrides, [role]: next });
+                    setRoleDriver(role, providerType, model);
+                    setSetting('modelOverrides', { ...overrides, [role]: normalized });
                     setSetting('modelMode', 'custom');
                   };
 

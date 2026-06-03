@@ -2480,7 +2480,7 @@ function AppCore() {
   // same React state machine. The user sees a normal Anton bubble
   // appear after they submit; under the hood the LLM never read the
   // values. Mirrors handleSendInTask but wired to streamDataVaultSubmission.
-  const handleSubmitDataVaultForm = ({ formId, formSpec, values, skipped }) => {
+  const handleSubmitDataVaultForm = ({ formId, formSpec, values, skipped, name, method }) => {
     if (!currentTask) return;
     const id = currentTask.id;
 
@@ -2537,6 +2537,8 @@ function AppCore() {
       formSpec,
       values,
       skipped,
+      name,
+      method,
       onEvent(ev) {
         const sid = ev?.conversation_id || ev?.response?.conversation_id;
         if (sid) adoptServerId(sid);
