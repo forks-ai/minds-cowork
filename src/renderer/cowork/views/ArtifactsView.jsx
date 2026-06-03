@@ -1171,6 +1171,15 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
   // Artifact awaiting the publish visibility choice (public vs password).
   // Null when the chooser is closed.
   const [publishTarget, setPublishTarget] = useState(null);
+  // Resolver for the promise returned by `handlePublish`, so a delegated
+  // caller (the preview's Publish button) can await the whole dialog +
+  // POST flow for its busy state. Settled when the chooser confirms,
+  // cancels, or errors — exactly once per flow.
+  const publishResolveRef = useRef(null);
+  const settlePublish = () => {
+    publishResolveRef.current?.();
+    publishResolveRef.current = null;
+  };
   // Page-level state for the shared HoverMenu — mounting the menu at
   // the parent (and not inside a card) is required because cards
   // apply `transform` on hover, which would re-anchor a position:fixed
@@ -1238,18 +1247,22 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
   // small dialog, then confirmPublish does the actual POST. Re-publishing
   // a protected artifact pre-fills its existing password.
   const handlePublish = (artifact) => {
-    if (!artifact?.path || busyPaths.has(artifact.path)) return;
+    if (!artifact?.path || busyPaths.has(artifact.path)) return Promise.resolve();
     if (!isHtmlArtifact(artifact)) {
       setToast({ kind: 'error', message: 'Only HTML artifacts can be published.' });
-      return;
+      return Promise.resolve();
     }
+    // Settle any prior unresolved flow before starting a new one so a
+    // delegated awaiter is never left hanging.
+    settlePublish();
     setPublishTarget(artifact);
+    return new Promise((resolve) => { publishResolveRef.current = resolve; });
   };
 
   const confirmPublish = async (password) => {
     const artifact = publishTarget;
     setPublishTarget(null);
-    if (!artifact?.path || busyPaths.has(artifact.path)) return;
+    if (!artifact?.path || busyPaths.has(artifact.path)) { settlePublish(); return; }
     setBusy(artifact.path, true);
     try {
       const r = await publishArtifact(artifact.path, password || undefined);
@@ -1276,6 +1289,7 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
       setToast({ kind: 'error', message: friendly });
     } finally {
       setBusy(artifact.path, false);
+      settlePublish();
     }
   };
 
@@ -1468,7 +1482,7 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
       {publishTarget && (
         <PublishDialog
           artifact={publishTarget}
-          onCancel={() => setPublishTarget(null)}
+          onCancel={() => { setPublishTarget(null); settlePublish(); }}
           onConfirm={confirmPublish}
         />
       )}
