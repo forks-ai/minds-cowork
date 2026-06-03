@@ -461,6 +461,13 @@ class ConnectorOAuthStartRequest(BaseModel):
 
 
 def _connector_oauth_callback_page(title: str, message: str, *, success: bool) -> HTMLResponse:
+    # Both `title` and `message` can carry attacker-controlled text — the
+    # OAuth callback feeds `error=<...>` query params and exception
+    # messages straight into here. Without escaping, a redirect to
+    # `/v1/connectors/oauth/callback?error=<script>...` would execute on
+    # the same loopback origin as the API and could exfiltrate vault
+    # data. The page title goes through escape() too because Safari/Chrome
+    # still parse a handful of HTML entities inside <title>.
     accent = "#1F9CB0" if success else "#b42318"
     safe_title = html.escape(title, quote=True)
     safe_message = html.escape(message, quote=True)
@@ -580,7 +587,11 @@ def connector_oauth_callback(
         )
 
     if error:
-        return _fail(f"The provider returned an error: {error}")
+        # Log the verbatim provider error for operators; the user-facing
+        # text is a length-bounded copy that the callback-page helper
+        # will HTML-escape before rendering.
+        logger.warning("connector oauth provider error for state=%s: %s", state[:8], error[:500])
+        return _fail(f"The provider returned an error: {error[:200]}")
     if not code:
         return _fail("The provider did not return an authorization code.")
 
@@ -608,8 +619,15 @@ def connector_oauth_callback(
         with urlopen(http_req, timeout=20) as resp:
             token_data = json.loads(resp.read().decode("utf-8"))
     except HTTPError as exc:
-        raw = exc.read().decode("utf-8", "replace")
-        return _fail(f"Token exchange failed ({exc.code}): {raw[:300]}")
+        # Log the provider's full response body for the operator; keep
+        # the user-facing message free of provider internals so we don't
+        # render attacker-controlled text into the callback page.
+        try:
+            raw = exc.read().decode("utf-8", "replace")
+        except Exception:
+            raw = ""
+        logger.warning("connector oauth token exchange HTTPError %s: %s", exc.code, raw[:1000])
+        return _fail(f"Token exchange failed with status {exc.code}.")
     except URLError:
         return _fail("Could not reach the provider's token endpoint.")
     except Exception:  # noqa: BLE001
@@ -641,6 +659,9 @@ def connector_oauth_callback(
             fields=fields,
         )
     except HTTPException as exc:
+        # `HTTPException.detail` is shaped by our own code (e.g. "Refusing
+        # to save empty credential record …"), so it's safe to surface
+        # verbatim — escape happens in the callback-page helper.
         return _fail(str(exc.detail))
     except Exception:  # noqa: BLE001
         logger.exception("connector oauth persist failed")

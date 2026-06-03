@@ -20,6 +20,29 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Refnames passed to git (remote, branch, commit sha) can become
+# command-line flags if they start with `-` (e.g. `--upload-pack=...`),
+# turning a positional argument into git option injection even though
+# `shell=False`. Reject anything that isn't a plain ref-shaped token.
+# We allow the characters git itself permits in refs / remote names.
+_REF_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
+
+
+def _safe_ref(value: str, *, kind: str) -> str:
+    """Validate a value that will be passed to git as a positional ref.
+
+    Raises ValueError on anything that could be interpreted as an
+    option (`-…`) or contains shell-/whitespace-special characters.
+    Returns the original string on success so call sites read naturally.
+    """
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"empty {kind!r} value")
+    if value.startswith("-"):
+        raise ValueError(f"{kind!r} value may not start with '-'")
+    if not _REF_RE.match(value):
+        raise ValueError(f"{kind!r} value contains disallowed characters")
+    return value
+
 # Files that should never be committed in an artifact folder
 GITIGNORE_ENTRIES = [
     ".published.json",
@@ -63,12 +86,13 @@ def _find_git_root(start: Path) -> Path | None:
     return None
 
 
-def _git(args: list[str], cwd: Path) -> tuple[int, str]:
+def _git(args: list[str], cwd: Path, input_text: str | None = None) -> tuple[int, str]:
     result = subprocess.run(
         ["git"] + args,
         cwd=str(cwd),
         capture_output=True,
         text=True,
+        input=input_text,
     )
     return result.returncode, (result.stdout + result.stderr).strip()
 
@@ -111,21 +135,23 @@ def commit(
 
         root = _ensure_repo(project_dir or artifact_folder.parents[3])
 
-        # Stage everything in the artifact folder
+        # Stage everything in the artifact folder. The `--` separator
+        # tells git to treat `rel` as a pathspec even if a folder name
+        # happens to start with `-`.
         rel = str(artifact_folder.relative_to(root))
-        rc, out = _git(["add", rel], cwd=root)
+        rc, out = _git(["add", "--", rel], cwd=root)
         if rc != 0:
             logger.warning("git add failed: %s", out)
             return False
 
         # Check if there is anything to commit
-        rc, status = _git(["status", "--porcelain", rel], cwd=root)
+        rc, status = _git(["status", "--porcelain", "--", rel], cwd=root)
         if not status.strip():
             logger.debug("Nothing to commit for %s", slug)
             return False
 
         message = f"artifact({slug}): {action} — {description}"
-        rc, out = _git(["commit", "-m", message], cwd=root)
+        rc, out = _git(["commit", "-F", "-"], cwd=root, input_text=message)
         if rc != 0:
             logger.warning("git commit failed: %s", out)
             return False
@@ -158,8 +184,23 @@ def rollback(
         if not root:
             raise RuntimeError("No git repo found")
 
+        safe_sha = _safe_ref(commit_sha, kind="commit_sha")
+
         rel = str(artifact_folder.relative_to(root))
-        rc, out = _git(["checkout", commit_sha, "--", rel], cwd=root)
+
+        rc, hist = _git(["log", "--pretty=format:%H", "--", rel], cwd=root)
+        history = hist.split() if rc == 0 else []
+        target = next(
+            (h for h in history if h == safe_sha or h.startswith(safe_sha)),
+            None,
+        )
+        if not target:
+            raise RuntimeError("commit_sha not found in artifact history")
+
+        # `--end-of-options` guarantees git treats `target` as a revision
+        # even if a future history ever produced a `-`-leading token, and
+        # `--` keeps `rel` a pathspec.
+        rc, out = _git(["checkout", "--end-of-options", target, "--", rel], cwd=root)
         if rc != 0:
             raise RuntimeError(f"git checkout failed: {out}")
 
@@ -204,11 +245,18 @@ def push(project_dir: Path, remote: str = "origin", branch: str = "HEAD") -> boo
         root = _find_git_root(project_dir)
         if not root:
             return False
-        rc, out = _git(["push", remote, branch], cwd=root)
+        # Both args become positional argv. Validate before they hit
+        # subprocess so attacker-controlled values can't pose as git
+        # options like `--upload-pack=…`.
+        safe_remote = _safe_ref(remote, kind="remote")
+        safe_branch = _safe_ref(branch, kind="branch")
+        rc, out = _git(
+            ["push", "--end-of-options", safe_remote, safe_branch], cwd=root
+        )
         if rc != 0:
             logger.warning("git push failed: %s", out)
             return False
-        logger.info("Pushed to %s %s", remote, branch)
+        logger.info("Pushed to %s %s", safe_remote, safe_branch)
         return True
     except Exception as e:
         logger.warning("artifact_git.push failed: %s", e)

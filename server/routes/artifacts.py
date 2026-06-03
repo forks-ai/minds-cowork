@@ -96,6 +96,11 @@ BG_CYCLE = [
     "linear-gradient(135deg, #fff, var(--stone-150))",
 ]
 
+# Upper bound on a raw artifact-path string. Generous (Linux PATH_MAX is
+# 4096); real artifact paths are far shorter. Rejects pathological input
+# before it ever reaches the filesystem.
+_MAX_ARTIFACT_PATH_LEN = 4096
+
 # Files under each artifact folder that are housekeeping rather than
 # user-content. They're listed in metadata for the renderer but not
 # considered when picking the "primary" file to open.
@@ -173,6 +178,70 @@ def _scan_artifact_dirs() -> list[Path]:
         if candidate.is_dir():
             dirs[str(candidate.resolve())] = candidate
     return list(dirs.values())
+
+
+def _allowed_artifact_dir_index() -> dict[str, Path]:
+    """Server-built allowlist of artifact folders.
+
+    Keys are string forms the UI may send back to the API.
+    Values are canonical, resolved artifact folder paths.
+
+    Important security property:
+    user input is never converted into a Path here. We only compare
+    user input as a plain string against paths discovered from trusted
+    registered project artifact roots.
+    """
+    allowed: dict[str, Path] = {}
+
+    for root in _scan_artifact_dirs():
+        try:
+            resolved_root = root.resolve(strict=True)
+        except OSError:
+            continue
+
+        try:
+            for child in resolved_root.iterdir():
+                try:
+                    if child.is_symlink() or not child.is_dir():
+                        continue
+
+                    resolved_child = child.resolve(strict=True)
+                    resolved_child.relative_to(resolved_root)
+                except (OSError, ValueError):
+                    continue
+
+                allowed[str(resolved_child)] = resolved_child
+                allowed[resolved_child.as_posix()] = resolved_child
+
+                allowed[str(child)] = resolved_child
+                allowed[child.as_posix()] = resolved_child
+
+        except OSError:
+            continue
+
+    return allowed
+
+
+def _safe_artifact_dir(raw_path: str) -> Path:
+    """Return a trusted artifact folder from a user-supplied path string.
+
+    The request value is treated only as an opaque string. It is never
+    expanded, resolved, joined, or opened. The only accepted values are
+    exact string matches for artifact folders discovered under registered
+    project `.anton/artifacts/` directories.
+    """
+    if not isinstance(raw_path, str) or not raw_path or "\x00" in raw_path:
+        raise HTTPException(status_code=400, detail="Invalid artifact path")
+
+    text = raw_path.strip()
+    if not text or text != raw_path:
+        raise HTTPException(status_code=400, detail="Invalid artifact path")
+
+    folder = _allowed_artifact_dir_index().get(text)
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Artifact folder not found")
+
+    return folder
 
 
 def _iter_artifact_folders(project_path: str | None = None) -> Iterator[Path]:
@@ -750,7 +819,7 @@ async def publish_app_artifact(req: AppPublishRequest):
     from pathlib import Path as _Path
     from .settings import _get_env
 
-    folder = _Path(req.path).expanduser().resolve()
+    folder = _safe_artifact_dir(req.path)
     if not folder.is_dir():
         raise HTTPException(status_code=404, detail="Artifact folder not found")
 
@@ -848,8 +917,7 @@ async def publish_app_artifact(req: AppPublishRequest):
 @router.post("/app/stop")
 async def stop_app_server(req: AppStopRequest):
     """Stop the local dev server for an app artifact."""
-    from pathlib import Path as _Path
-    folder = _Path(req.path).expanduser().resolve()
+    folder = _safe_artifact_dir(req.path)
     _stop_app_server(folder)
     return {"status": "stopped"}
 
@@ -857,8 +925,7 @@ async def stop_app_server(req: AppStopRequest):
 @router.get("/app/log")
 async def get_artifact_log(path: str = Query(..., description="Absolute path to artifact folder")):
     """Return git commit history for an artifact folder."""
-    from pathlib import Path as _Path
-    folder = _Path(path).expanduser().resolve()
+    folder = _safe_artifact_dir(path)
     entries = _git_log(folder)
     return {"entries": entries}
 
@@ -869,8 +936,7 @@ async def rollback_artifact(req: RollbackRequest):
     Restore an artifact folder to a specific git commit SHA.
     If redeploy=true, triggers a re-publish after rollback.
     """
-    from pathlib import Path as _Path
-    folder = _Path(req.path).expanduser().resolve()
+    folder = _safe_artifact_dir(req.path)
     slug   = folder.name
 
     ok = _git_rollback(folder, slug, req.commit_sha)
@@ -903,7 +969,7 @@ async def teardown_app_artifact(path: str = Query(..., description="Absolute pat
     from pathlib import Path as _Path
     from .settings import _get_env
 
-    folder = _Path(path).expanduser().resolve()
+    folder = _safe_artifact_dir(path)
     published_path = folder / ".published.json"
 
     if not published_path.is_file():
