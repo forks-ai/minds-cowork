@@ -73,6 +73,10 @@ interface AntonTronAPI {
 declare global {
   /** Injected by Vite at build time from package.json `version`. */
   const __APP_VERSION__: string;
+  /** Short git commit hash at build time, or '' outside a repo. */
+  const __GIT_HASH__: string;
+  /** ISO 8601 timestamp of when the bundle was built. */
+  const __BUILD_TIME__: string;
   interface Window {
     antontron: AntonTronAPI;
   }

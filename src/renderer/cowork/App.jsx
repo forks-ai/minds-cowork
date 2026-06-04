@@ -56,6 +56,27 @@ const CONNECT_FOLLOWUPS = [
   "Any questions about the setup? I'm here to help.",
 ];
 
+// Print a version/build banner to the browser console on startup so
+// developers and QA can quickly confirm which releases are running.
+// UI line prints immediately (build-time). Server versions are fetched
+// eagerly from /health so they appear even if AppCore hasn't mounted.
+{
+  const ui = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '?';
+  const hash = typeof __GIT_HASH__ !== 'undefined' && __GIT_HASH__ ? __GIT_HASH__ : '';
+  const built = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : '';
+  console.log(
+    '%c Anton %c Build Info ',
+    'background:#7CC4B6;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px 0 0 3px',
+    'background:#334;color:#eee;padding:2px 6px;border-radius:0 3px 3px 0',
+  );
+  console.log(`  UI (cowork):  ${ui}${hash ? ` (${hash})` : ''}${built ? `  built ${built}` : ''}`);
+  fetchHealth().then((h) => {
+    if (!h || h.status === 'offline') return;
+    console.log(`  Server (cowork-server):  ${h.server_version || '?'}`);
+    console.log(`  Agent (anton-agent):     ${h.anton_version || '?'}`);
+  }).catch(() => {});
+}
+
 // Build a short context block describing the user's current
 // connect-form state. Sent appended to chat messages so the agent
 // has continuous awareness of what the user is connecting and how
