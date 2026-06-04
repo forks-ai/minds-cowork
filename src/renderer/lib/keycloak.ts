@@ -1,6 +1,12 @@
 import Keycloak from 'keycloak-js';
 
-const keycloakUrl = import.meta.env.VITE_KEYCLOAK_URL || 'https://auth.mindshub.ai/auth';
+// Web uses dev Keycloak (localhost support for npm run dev:web).
+// Electron uses prod Keycloak. Both can be overridden via VITE_KEYCLOAK_URL.
+const isWeb = typeof window !== 'undefined' && window.location.protocol !== 'app:';
+const defaultKeycloakUrl = isWeb
+  ? 'https://auth.dev.mindshub.ai/auth'
+  : 'https://auth.mindshub.ai/auth';
+const keycloakUrl = import.meta.env.VITE_KEYCLOAK_URL || defaultKeycloakUrl;
 
 // Base URL without query params for Keycloak redirect (Keycloak validates strictly)
 const redirectUri = typeof window !== 'undefined'
