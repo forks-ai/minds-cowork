@@ -477,11 +477,7 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
       return;
     }
     // Prefer the parent's visibility chooser (public vs password). Fall
-    // back to a direct public publish when no chooser is wired. The
-    // chooser returns a promise that settles when its dialog flow
-    // (confirm or cancel) and the POST complete — await it under `busy`
-    // so the button stays disabled for the whole operation and always
-    // re-enables, exactly like the local path below.
+    // back to a direct public publish when no chooser is wired.
     if (onRequestPublish) {
       setBusy(true);
       try {
