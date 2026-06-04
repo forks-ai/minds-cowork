@@ -1425,7 +1425,7 @@ export default function ChatView({
                   time={formatTime(m.createdAt)}
                   copyText={m.content}
                   onDelete={() => onDeleteTurn?.(turnIdxForThisBubble)}
-                  agentLabel={harnessLabel(m.harness) || agentLabel}
+                  agentLabel={harnessLabel(m.harness) || 'Agent'}
                 >
                   {m.steps?.length > 0 && (
                     <ThinkingBlock
