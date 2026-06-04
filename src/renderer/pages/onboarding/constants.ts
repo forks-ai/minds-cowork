@@ -1,8 +1,8 @@
 import type { ModelOption } from './types';
 
-const KEYCLOAK_URL = import.meta.env.VITE_KEYCLOAK_URL || 'https://auth.dev.mindshub.ai/auth';
+const KEYCLOAK_URL = import.meta.env.VITE_KEYCLOAK_URL || 'https://auth.mindshub.ai/auth';
 const KEYCLOAK_BASE = KEYCLOAK_URL.replace('/auth', '');
-export const MINDS_API_BASE = import.meta.env.VITE_MINDS_API_URL || 'https://api.dev.mindshub.ai';
+export const MINDS_API_BASE = import.meta.env.VITE_MINDS_API_URL || 'https://api.mindshub.ai';
 // Single source of truth for the MindsHub console. Flip to
 // https://console.mindshub.ai when the desktop app moves to prod.
 export const MINDS_CONSOLE_URL = MINDS_API_BASE.replace('://api.', '://console.');

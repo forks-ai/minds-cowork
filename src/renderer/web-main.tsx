@@ -44,7 +44,11 @@ function handleKeycloakEvent(event: string): void {
   if (event === 'onAuthSuccess') {
     stopRefresh?.();
     if (keycloak.token) {
-      host.saveSettings(MINDS_ENV(keycloak.token)).catch(() => {});
+      host.saveSettings(MINDS_ENV(keycloak.token)).then(() => {
+        // After MindsHub credentials are saved, reload so App.tsx
+        // re-runs its init and detects the now-configured provider.
+        window.location.reload();
+      }).catch(() => {});
     }
     stopRefresh = scheduleWebTokenRefresh(async (token) => {
       await host.saveSettings(MINDS_ENV(token));

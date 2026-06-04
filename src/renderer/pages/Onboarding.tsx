@@ -26,9 +26,9 @@ const GEMINI_MODELS = [
 ];
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
-const KEYCLOAK_URL = import.meta.env.VITE_KEYCLOAK_URL || 'https://auth.dev.mindshub.ai/auth';
+const KEYCLOAK_URL = import.meta.env.VITE_KEYCLOAK_URL || 'https://auth.mindshub.ai/auth';
 const KEYCLOAK_BASE = KEYCLOAK_URL.replace('/auth', '');
-const MINDS_API_URL = import.meta.env.VITE_MINDS_API_URL || 'https://api.dev.mindshub.ai';
+const MINDS_API_URL = import.meta.env.VITE_MINDS_API_URL || 'https://api.mindshub.ai';
 
 const CUSTOM_MODEL = '__custom__';
 
@@ -288,27 +288,29 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
   const handleMindsSSO = async () => {
     setPhase('validating');
     setErrorMsg('');
-    const result = await host.oauthConnect({
-      clientId: 'anton-desktop',
-      authUrl: 'https://auth.dev.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/auth',
-      tokenUrl: 'https://auth.dev.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/token',
-      scopes: ['openid', 'profile', 'email', 'organization', 'offline_access'],
-    });
-    if (!result.ok) {
+    // mindshubLogin handles OAuth and caches the token for mindshubFinalize
+    const loginResult = await host.mindshubLogin();
+    if (!loginResult.ok) {
       setPhase('error');
       setErrorMsg('Sign in cancelled or failed. Please try again.');
       return;
     }
-    // Token keys already written to .env by the oauth:connect IPC handler.
-    // SETTINGS_SAVE is merge-write, so these config keys won't clobber them.
+    // Provision the API key from the auth-service using the cached access token
+    const finalizeResult = await host.mindshubFinalize();
+    if (!finalizeResult.ok) {
+      setPhase('error');
+      setErrorMsg(finalizeResult.reason || 'Failed to set up MindsHub. Please try again.');
+      return;
+    }
+    // API key is now written to env by mindshubFinalize, save config keys to complete onboarding
     await saveFinal([
       'ANTON_TERMS_CONSENT=true',
       'ANTON_MINDS_ENABLED=true',
-      'ANTON_MINDS_URL=https://api.dev.mindshub.ai',
+      'ANTON_MINDS_URL=https://api.mindshub.ai',
       'ANTON_PLANNING_PROVIDER=openai-compatible',
       'ANTON_CODING_PROVIDER=openai-compatible',
-      'ANTON_PLANNING_MODEL=_reason_',
-      'ANTON_CODING_MODEL=_code_',
+      'ANTON_PLANNING_MODEL=latest:sonnet',
+      'ANTON_CODING_MODEL=latest:haiku',
     ]);
   };
 
@@ -327,11 +329,11 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
       saveFinal([
         'ANTON_TERMS_CONSENT=true',
         'ANTON_MINDS_ENABLED=true',
-        'ANTON_MINDS_URL=https://api.dev.mindshub.ai',
+        'ANTON_MINDS_URL=https://api.mindshub.ai',
         'ANTON_PLANNING_PROVIDER=openai-compatible',
         'ANTON_CODING_PROVIDER=openai-compatible',
-        'ANTON_PLANNING_MODEL=_reason_',
-        'ANTON_CODING_MODEL=_code_',
+        'ANTON_PLANNING_MODEL=latest:sonnet',
+        'ANTON_CODING_MODEL=latest:haiku',
       ]);
     });
     return () => { cancelled = true; };
