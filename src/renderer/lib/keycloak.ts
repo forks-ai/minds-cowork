@@ -2,6 +2,11 @@ import Keycloak from 'keycloak-js';
 
 const keycloakUrl = import.meta.env.VITE_KEYCLOAK_URL || 'https://auth.mindshub.ai/auth';
 
+// Base URL without query params for Keycloak redirect (Keycloak validates strictly)
+const redirectUri = typeof window !== 'undefined'
+  ? `${window.location.protocol}//${window.location.host}${window.location.pathname}`
+  : undefined;
+
 const keycloak = new Keycloak({
   url: keycloakUrl,
   realm: 'mindsdb',
@@ -10,7 +15,7 @@ const keycloak = new Keycloak({
 
 keycloak.onAuthError = () => {
   keycloak.clearToken();
-  keycloak.login({ redirectUri: window.location.href });
+  keycloak.login({ redirectUri });
 };
 
 export { keycloak };
