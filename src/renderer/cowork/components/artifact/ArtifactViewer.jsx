@@ -833,6 +833,14 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
               disabled: !hasActionPath,
               onClick: onOpenOS,
             }]),
+            // Download mirrors the main action-row button and the
+            // list-view kebab — visible in any shell as long as the
+            // artifact has a serve URL the sidecar can stream.
+            ...(artifact?.serveUrl ? [{
+              label: 'Download',
+              icon: Ico.download(13),
+              onClick: onDownload,
+            }] : []),
             {
               label: publishedUrl ? 'Unpublish' : 'Publish',
               icon: Ico.upload(13),
