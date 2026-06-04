@@ -14,7 +14,15 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from .artifacts import _resolve_artifact_path, _scan_artifact_dirs
+from .artifacts import (
+    _artifact_root_for,
+    _load_metadata,
+    _pick_primary,
+    _published_url_for,
+    _resolve_artifact_path,
+    _scan_artifact_dirs,
+    _user_files,
+)
 from .cowork_state import backups_dir, load_state, save_state, utc_now_iso
 from .integrations import ensure_managed_integrations
 from .settings import _get_env, get_config_status
@@ -120,7 +128,7 @@ def _memory_file_payload(
     resolved_root = root.resolve()
     resolved_path = path.resolve()
     payload: dict[str, Any] = {
-        "name": path.stem.replace("-", " ").replace("_", " ").title(),
+        "name": _titleize(path.stem),
         "path": str(resolved_path),
         "relativePath": str(resolved_path.relative_to(resolved_root)),
         "scope": scope,
@@ -661,6 +669,61 @@ async def delete_datasource(engine: str, name: str):
     return {"status": "ok", "deleted": {"engine": engine, "name": name}}
 
 
+def _fullstack_types() -> frozenset[str]:
+    """The artifact types anton's publisher bundles as fullstack apps.
+
+    Imported lazily so the publish routes degrade to static-HTML-only
+    behavior if the anton package is unavailable, rather than 500ing.
+    """
+    try:
+        from anton.publisher import FULLSTACK_ARTIFACT_TYPES
+        return frozenset(FULLSTACK_ARTIFACT_TYPES)
+    except Exception:
+        return frozenset()
+
+
+def _titleize(name: str) -> str:
+    """Folder/file stem → a human title for the publish list."""
+    return name.replace("_", " ").replace("-", " ").title()
+
+
+def _resolve_publish_target(artifact: Path) -> tuple[Path, Path, str, bool]:
+    """Decide what to publish given a resolved artifact path (file OR dir).
+
+    Folder-based artifacts are addressed by their folder; legacy loose-HTML
+    (and chat-bubble / Utilities-list) artifacts by their file. In both
+    cases:
+      - fullstack (metadata.json type ∈ FULLSTACK_ARTIFACT_TYPES) → publish
+        the artifact *directory* (anton bundles backend.py + static/ +
+        requirements.txt only when handed a dir), `.published.json` at root;
+      - static → publish the single primary *file* (anton's `_zip_html`
+        renames it to index.html + pulls referenced siblings; handing it a
+        dir would over-bundle metadata.json/data and skip the rename),
+        `.published.json` in that file's parent.
+    The map is always keyed by the primary file name — matching how
+    `_published_url_for` / `list_artifacts` read it back.
+
+    Returns (publish_target, published_dir, published_key, is_fullstack).
+    """
+    if artifact.is_dir():
+        # Folder addressed directly — its primary file lives inside.
+        artifact_root = artifact
+        meta = _load_metadata(artifact_root) or {}
+        primary = _pick_primary(artifact_root, _user_files(artifact_root), primary_hint=meta.get("primary"))
+    else:
+        # File addressed directly — it *is* the primary; climb to its root.
+        artifact_root = _artifact_root_for(artifact)
+        meta = _load_metadata(artifact_root) if (artifact_root / "metadata.json").is_file() else None
+        primary = artifact
+
+    if (meta or {}).get("type") in _fullstack_types():
+        key = primary.name if primary else "index.html"
+        return artifact_root, artifact_root, key, True
+    if primary:
+        return primary, primary.parent, primary.name, False
+    return artifact_root, artifact_root, "index.html", False
+
+
 def _html_artifacts() -> list[dict[str, Any]]:
     """List every HTML file under every project's `.anton/artifacts/` tree.
 
@@ -674,6 +737,8 @@ def _html_artifacts() -> list[dict[str, Any]]:
     """
     out = []
     seen = set()
+    seen_roots: set[str] = set()
+    fullstack_types = _fullstack_types()
     for art_root in _scan_artifact_dirs():
         if not art_root.exists():
             continue
@@ -681,19 +746,36 @@ def _html_artifacts() -> list[dict[str, Any]]:
             key = str(path.resolve())
             if key in seen:
                 continue
+
+            # Fullstack apps keep their pages inside `static/`. Surface
+            # them as a single entry per artifact root (titled by the
+            # root's metadata), not one row per page.
+            artifact_root = _artifact_root_for(path)
+            meta = _load_metadata(artifact_root) if (artifact_root / "metadata.json").is_file() else None
+            if (meta or {}).get("type") in fullstack_types:
+                root_key = str(artifact_root.resolve())
+                if root_key in seen_roots:
+                    continue
+                seen_roots.add(root_key)
+                primary = meta.get("primary") or ""
+                entry_path = (artifact_root / primary) if primary else path
+                if not entry_path.is_file():
+                    entry_path = path
+                seen.add(str(entry_path.resolve()))
+                out.append({
+                    "title": meta.get("name") or _titleize(artifact_root.name),
+                    "path": str(entry_path),
+                    "bytes": entry_path.stat().st_size if entry_path.is_file() else 0,
+                    "publishedUrl": _published_url_for(artifact_root, entry_path),
+                })
+                continue
+
             seen.add(key)
-            published_path = path.parent / ".published.json"
-            published = {}
-            if published_path.is_file():
-                try:
-                    published = json.loads(published_path.read_text(encoding="utf-8")).get(path.name, {})
-                except Exception:
-                    published = {}
             out.append({
-                "title": path.stem.replace("_", " ").replace("-", " ").title(),
+                "title": _titleize(path.stem),
                 "path": str(path),
                 "bytes": path.stat().st_size,
-                "publishedUrl": published.get("url", "") if isinstance(published, dict) else "",
+                "publishedUrl": _published_url_for(path.parent, path),
             })
     return out[:40]
 
@@ -711,6 +793,11 @@ async def list_publishable():
 
 class PublishRequest(BaseModel):
     path: str
+    # Optional access password. When set, the artifact is published
+    # password-protected — only a hash leaves this machine; the plaintext
+    # is kept in .published.json for the in-app reveal. Omit / empty to
+    # publish (or re-publish) as public.
+    password: str | None = None
 
 
 @router.post("/publish")
@@ -719,8 +806,12 @@ async def publish_artifact(req: PublishRequest):
     if not api_key:
         raise HTTPException(status_code=400, detail="Configure ANTON_MINDS_API_KEY before publishing")
 
-    artifact = _resolve_artifact_path(req.path)
-    if artifact.suffix.lower() != ".html":
+    # The request path is either the artifact folder (folder-based
+    # artifacts) or a single file (legacy loose-HTML, chat-bubble, or the
+    # Utilities per-page list). `_resolve_publish_target` normalizes both.
+    artifact = _resolve_artifact_path(req.path, allow_dir=True)
+    publish_target, published_dir, published_key, is_fullstack = _resolve_publish_target(artifact)
+    if not is_fullstack and publish_target.suffix.lower() != ".html":
         raise HTTPException(status_code=415, detail="Only HTML artifacts can be published")
 
     try:
@@ -728,23 +819,34 @@ async def publish_artifact(req: PublishRequest):
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Anton publisher is unavailable") from exc
 
-    published_json = artifact.parent / ".published.json"
+    published_json = published_dir / ".published.json"
     published_map: dict[str, Any] = {}
     if published_json.is_file():
         try:
             published_map = json.loads(published_json.read_text(encoding="utf-8"))
         except Exception:
             published_map = {}
-    previous = published_map.get(artifact.name)
+    previous = published_map.get(published_key)
     report_id = previous.get("report_id") if isinstance(previous, dict) else None
+
+    # Resolve access state. A non-empty password publishes (or keeps) the
+    # artifact password-protected; empty/None publishes it public. Bump
+    # pwd_version whenever the password value changes so access cookies
+    # issued for the old password stop validating in the viewer.
+    password = (req.password or "").strip() or None
+    prev_password = previous.get("access_password") if isinstance(previous, dict) else None
+    prev_version = previous.get("pwd_version", 0) if isinstance(previous, dict) else 0
+    pwd_version = (prev_version + 1) if password and password != prev_password else (prev_version or 1)
 
     try:
         result = publish(
-            artifact,
+            publish_target,
             api_key=api_key,
             report_id=report_id,
             publish_url=_get_env("ANTON_PUBLISH_URL", "https://4nton.ai"),
             ssl_verify=_get_env("ANTON_MINDS_SSL_VERIFY", "true").lower() == "true",
+            password=password,
+            pwd_version=pwd_version,
         )
     except Exception as exc:
         logger.exception("Publishing failed")
@@ -754,17 +856,23 @@ async def publish_artifact(req: PublishRequest):
     returned_report_id = result.get("report_id", "")
     if returned_report_id:
         history_item = {
-            "artifact": str(artifact),
-            "artifactName": artifact.name,
+            "artifact": str(publish_target),
+            "artifactName": published_key,
             "url": view_url,
             "reportId": returned_report_id,
             "publishedAt": utc_now_iso(),
         }
-        published_map[artifact.name] = {
+        entry: dict[str, Any] = {
             "report_id": returned_report_id,
             "url": view_url,
             "last_md5": result.get("md5", ""),
+            "requires_password": bool(password),
         }
+        if password:
+            # Owner-side only — .published.json never enters the bundle.
+            entry["access_password"] = password
+            entry["pwd_version"] = pwd_version
+        published_map[published_key] = entry
         try:
             published_json.write_text(json.dumps(published_map, indent=2) + "\n", encoding="utf-8")
         except Exception:
@@ -773,7 +881,12 @@ async def publish_artifact(req: PublishRequest):
         state["publish_history"] = [history_item, *state.get("publish_history", [])][:100]
         save_state(state)
 
-    return {"status": "ok", "url": view_url, "result": {k: v for k, v in result.items() if k != "file_payload"}}
+    return {
+        "status": "ok",
+        "url": view_url,
+        "accessProtected": bool(password),
+        "result": {k: v for k, v in result.items() if k != "file_payload"},
+    }
 
 
 @router.delete("/publish")
@@ -788,8 +901,11 @@ async def unpublish_artifact(path: str = Query(..., description="Absolute path t
     if not api_key:
         raise HTTPException(status_code=400, detail="Configure ANTON_MINDS_API_KEY before unpublishing")
 
-    artifact = _resolve_artifact_path(path)
-    published_json = artifact.parent / ".published.json"
+    artifact = _resolve_artifact_path(path, allow_dir=True)
+    # Mirror publish: resolve the same .published.json location + key
+    # (primary file name) whether a folder or a file was passed.
+    _publish_target, published_dir, published_key, _is_fullstack = _resolve_publish_target(artifact)
+    published_json = published_dir / ".published.json"
     if not published_json.is_file():
         raise HTTPException(status_code=404, detail="Artifact has no publish record")
 
@@ -798,7 +914,7 @@ async def unpublish_artifact(path: str = Query(..., description="Absolute path t
     except Exception:
         raise HTTPException(status_code=500, detail="Could not read publish record")
 
-    entry = published_map.get(artifact.name)
+    entry = published_map.get(published_key)
     # Match anton's CLI: prefer the report_id, fall back to last_md5.
     # mdb.ai's `/delete/{id}` endpoint accepts the report_id directly,
     # which is what the publish response gives us; the md5 is the
@@ -837,7 +953,7 @@ async def unpublish_artifact(path: str = Query(..., description="Absolute path t
 
     # Strip from the per-folder map so the artifact is no longer
     # reported as published.
-    published_map.pop(artifact.name, None)
+    published_map.pop(published_key, None)
     try:
         if published_map:
             published_json.write_text(json.dumps(published_map, indent=2) + "\n", encoding="utf-8")

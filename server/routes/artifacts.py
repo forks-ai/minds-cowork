@@ -30,6 +30,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Iterator
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -319,6 +320,120 @@ def _published_url_for(folder: Path, primary: Path | None) -> str:
     return ""
 
 
+def _published_access_for(folder: Path, primary: Path | None) -> dict:
+    """Owner-side access state for the primary file, from `.published.json`.
+
+    Returns {"accessProtected": bool, "accessPassword": str}. The plaintext
+    password is owner-only — `.published.json` never enters the published
+    bundle — and powers the in-app eye-reveal. Callers must only return
+    this to the artifact's owner (the local/authenticated session).
+    """
+    out = {"accessProtected": False, "accessPassword": ""}
+    if primary is None:
+        return out
+    published_index = folder / ".published.json"
+    if not published_index.is_file():
+        return out
+    try:
+        pmap = json.loads(published_index.read_text(encoding="utf-8"))
+        entry = pmap.get(primary.name)
+        if isinstance(entry, dict) and entry.get("requires_password"):
+            out["accessProtected"] = True
+            out["accessPassword"] = entry.get("access_password", "") or ""
+    except Exception:
+        pass
+    return out
+
+
+# ─── Stable HTTP serving ─────────────────────────────────────────────────
+#
+# Origin-relative URLs that serve an artifact's files straight off disk:
+#
+#   GET /v1/artifacts/serve/<project_name>/<rel_path_under_.anton/artifacts>
+#
+# Unlike the token-keyed `preview-asset` flow, this is STATELESS — the
+# project + path are resolved at request time, so there's nothing to
+# register, nothing to keep in sync as projects come and go, and the
+# URL is stable + shareable. Origin-relative means it resolves against
+# whatever host the browser is on: 127.0.0.1:26866 in the desktop
+# shell, the public origin in the web deployment. No 127.0.0.1 ever
+# leaks into a URL.
+#
+# Access control is handled entirely by the auth proxy in front of the
+# deployment (it gates every endpoint, this one included), so the route
+# carries no auth logic — same trust model as the rest of /v1/*. The
+# only thing it enforces is that you can't escape a registered
+# project's artifacts tree (project allowlist + path-traversal guard).
+
+
+def _project_artifacts_base(project_name: str) -> Path | None:
+    """Resolve a project NAME to its `<base>/.anton/artifacts` dir, but
+    only when it maps to a registered project (allowlist). Returns None
+    for unknown projects or anything that looks like a path-traversal
+    attempt in the name itself."""
+    if (not project_name or "\x00" in project_name
+            or "/" in project_name or "\\" in project_name
+            or project_name in (".", "..")):
+        return None
+    registered = {p for p in _registered_project_dirs()}
+    try:
+        candidate = projects_store.project_path(project_name).resolve(strict=False)
+    except (OSError, ValueError):
+        return None
+    if candidate not in registered:
+        return None
+    base = candidate / ".anton" / "artifacts"
+    return base if base.is_dir() else None
+
+
+def _serve_url_for(path: str | Path) -> str:
+    """Origin-relative `/v1/artifacts/serve/...` URL for a file that
+    lives under some registered project's `.anton/artifacts` tree.
+    Returns "" when the path isn't inside such a tree (e.g. an artifact
+    whose folder has no primary file yet, so `path` is the folder)."""
+    try:
+        p = Path(path).resolve(strict=False)
+    except (OSError, ValueError):
+        return ""
+    for project_dir in _registered_project_dirs():
+        base = (project_dir / ".anton" / "artifacts")
+        try:
+            rel = p.relative_to(base.resolve())
+        except (ValueError, OSError):
+            continue
+        if not rel.parts:
+            return ""  # the path IS the artifacts dir, not a file under it
+        rel_str = "/".join(quote(part) for part in rel.parts)
+        return f"/v1/artifacts/serve/{quote(project_dir.name)}/{rel_str}"
+    return ""
+
+
+@router.get("/serve/{project_name}/{file_path:path}")
+def serve_artifact(project_name: str, file_path: str):
+    """Serve a file from `<project>/.anton/artifacts/<file_path>` over
+    HTTP. Stateless, origin-relative, frame-able (no X-Frame-Options) so
+    the in-app iframe and a plain new-tab open both work in the web
+    deployment without round-tripping a publish to the external host."""
+    base = _project_artifacts_base(project_name)
+    if base is None:
+        raise HTTPException(status_code=404, detail="Unknown project")
+    try:
+        target = (base / file_path).resolve()
+        target.relative_to(base.resolve())
+    except (ValueError, OSError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid artifact path") from exc
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Artifact file not found")
+    media_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+    # Deliberately do NOT set X-Frame-Options — the in-app preview
+    # frames this same-origin. The viewer's iframe sandbox already
+    # drops `allow-same-origin`, so framing can't be abused to read the
+    # API with the user's session.
+    return FileResponse(target, media_type=media_type, headers={
+        "Cache-Control": "private, max-age=60",
+    })
+
+
 # ─── Listing ───────────────────────────────────────────────────────────────
 
 
@@ -383,6 +498,12 @@ async def list_artifacts(project_path: str | None = Query(default=None)):
             # show a small "auto" hint in either direction if useful.
             "primary": meta.get("primary") or None,
             "publishedUrl": _published_url_for(folder, primary),
+            # Owner-side access state (lock badge + eye-reveal). accessPassword
+            # is the plaintext, returned only to the owner's own session.
+            **_published_access_for(folder, primary),
+            # Origin-relative URL the web client can open / iframe
+            # directly. "" when the artifact has no primary file yet.
+            "serveUrl": _serve_url_for(primary_path),
             "_sortTs": sort_ts,
         })
 
@@ -427,7 +548,7 @@ def _candidate_relative_artifacts(raw_path: str) -> list[Path]:
     return list(matches.values())
 
 
-def _resolve_artifact_path(raw_path: str) -> Path:
+def _resolve_artifact_path(raw_path: str, *, allow_dir: bool = False) -> Path:
     """Turn an artifact request path into an absolute path on disk.
 
     Accepts:
@@ -435,6 +556,12 @@ def _resolve_artifact_path(raw_path: str) -> Path:
       - Relative paths anchored at any artifact root (slug-prefixed, or
         with a leading `artifacts/` / `.anton/artifacts/`).
     Path-traversal guarded; non-existent files yield 404.
+
+    When `allow_dir` is set, an absolute path that resolves to an artifact
+    *root directory* (one carrying `metadata.json`) is also accepted — used
+    by publish/unpublish so a folder-based artifact can be addressed by its
+    folder. The relative-path branch stays file-only (the client always
+    sends absolute folder paths).
     """
     # Reject null bytes, which are used in path injection attacks.
     if "\x00" in raw_path:
@@ -458,6 +585,8 @@ def _resolve_artifact_path(raw_path: str) -> Path:
                 continue
             if resolved.is_file():
                 return resolved
+            if allow_dir and resolved.is_dir() and (resolved / "metadata.json").is_file():
+                return resolved
         raise HTTPException(status_code=404, detail="Artifact is not in a known artifacts directory")
 
     matches = _candidate_relative_artifacts(raw_path)
@@ -469,6 +598,32 @@ def _resolve_artifact_path(raw_path: str) -> Path:
             detail="Artifact path matches multiple project artifact roots; pass an absolute path",
         )
     raise HTTPException(status_code=404, detail="Artifact is not in a known artifacts directory")
+
+
+def _artifact_root_for(path: Path) -> Path:
+    """Climb from an artifact file to the folder that holds its
+    `metadata.json` — the artifact root.
+
+    The primary file isn't always at the root: backend+frontend apps
+    keep their frontend in a `static/` subdir (so the backend can mount
+    it with `StaticFiles`), which puts the primary one level below the
+    root. `path.parent` then points at `static/`, where there's no
+    `metadata.json`, and callers that look there miss the backend port
+    entirely. We walk up until we find the dir carrying `metadata.json`,
+    bounded by the registered artifact container dirs
+    (`<base>/.anton/artifacts/`) so a metadata-less tree can't send us
+    climbing into the rest of the disk. Falls back to `path.parent`.
+    """
+    containers = {str(d.resolve()) for d in _scan_artifact_dirs()}
+    current = path.parent.resolve()
+    while True:
+        if (current / "metadata.json").is_file():
+            return current
+        # Stop at a container root (its direct children are the artifact
+        # roots — it has no metadata.json of its own) or the fs root.
+        if str(current) in containers or current.parent == current:
+            return path.parent.resolve()
+        current = current.parent
 
 
 def _reveal_in_file_manager(artifact: Path) -> None:
@@ -614,6 +769,39 @@ async def _launch_backend_locked(
         return False, "Artifact is not in a registered project.", 0
 
     pool = scratchpad_runtime.WorkspaceScopedPool(str(project_root))
+
+    # Inject the secrets of datasources the artifact declared in metadata.json
+    # into the backend subprocess only — NOT the cowork server's global
+    # os.environ. The chat flow (conversation_manager) injects broadly because
+    # tools run in-process; here the backend is a separate subprocess, so we
+    # build an explicit env mapping and let the launcher merge it for the spawn.
+    extra_env: dict[str, str] = {}
+    try:
+        meta = _load_metadata(artifact_dir) or {}
+        datasources = meta.get("datasources") or []
+        if datasources:
+            from anton.core.datasources.data_vault import LocalDataVault
+
+            vault = LocalDataVault()
+            for ds in datasources:
+                engine, name = ds.get("engine"), ds.get("name")
+                if not engine or not name:
+                    continue
+                env = vault.env_for(engine, name)
+                if env is None:
+                    logger.warning(
+                        "Datasource %s/%s declared by artifact %s not found in vault — skipping",
+                        engine,
+                        name,
+                        slug,
+                    )
+                    continue
+                extra_env.update(env)
+    except Exception:
+        logger.warning(
+            "Could not build datasource env for backend launch of %s", slug, exc_info=True
+        )
+
     # anton's default health_timeout is 10s — too short for artifacts
     # that do slow IO (HTTP fetches with retry/backoff, large model
     # loads, etc.) before binding their port. The launcher then
@@ -626,6 +814,7 @@ async def _launch_backend_locked(
         artifact_folder=artifact_dir,
         scratchpad_pool=pool,
         tracked_backends=_LAUNCHED_BACKENDS,
+        extra_env=extra_env,
         health_timeout=45.0,
     )
     if isinstance(result, str):
@@ -705,12 +894,16 @@ class PreviewMountRequest(BaseModel):
 async def preview_mount(req: PreviewMountRequest):
     artifact = _resolve_artifact_path(req.path)
     parent = artifact.parent.resolve()
+    # The artifact root (where metadata.json lives) is not always the
+    # primary file's parent — fullstack apps keep their frontend in a
+    # `static/` subdir. Resolve it explicitly for all backend lookups.
+    artifact_root = _artifact_root_for(artifact)
 
     # Backend+frontend artifacts carry a running web server. Detect them
     # by a `port` field in metadata.json — the iframe will load through
     # the Electron-main proxy instead of preview-asset.
     backend_port: int | None = None
-    metadata_path = parent / "metadata.json"
+    metadata_path = artifact_root / "metadata.json"
     if metadata_path.is_file():
         try:
             meta = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -737,20 +930,27 @@ async def preview_mount(req: PreviewMountRequest):
         # helper allocates one each time); we echo it back so the
         # renderer doesn't have to re-read metadata.json.
         running, launch_detail, current_port = await _ensure_backend_running(
-            parent, backend_port
+            artifact_root, backend_port
         )
         # Web shell: register the dir with the in-process proxy and
         # build a loopback URL the iframe can load. Electron ignores
         # `proxyUrl` and goes through its own main-process forwarder.
-        preview_proxy.set_artifact(parent)
-        proxy_url = preview_proxy.url_for(parent) or ""
+        preview_proxy.set_artifact(artifact_root)
+        proxy_url = preview_proxy.url_for(artifact_root) or ""
+        # Fullstack apps publish from the artifact root, with `.published.json`
+        # at the root keyed by the primary file name — the same shape the
+        # static branch and `list_artifacts` read via these helpers. Surface
+        # the published state so the viewer shows the "Published" pill and
+        # `public url` row for backend artifacts too.
         return {
             "kind": "proxy",
-            "artifactDir": str(parent),
+            "artifactDir": str(artifact_root),
             "port": current_port if running else backend_port,
             "backendRunning": running,
             "launchError": "" if running else launch_detail,
             "proxyUrl": proxy_url,
+            "publishedUrl": _published_url_for(artifact_root, artifact),
+            **_published_access_for(artifact_root, artifact),
         }
 
     if artifact.suffix.lower() != ".html":
@@ -759,6 +959,8 @@ async def preview_mount(req: PreviewMountRequest):
     _PREVIEW_MOUNTS[token] = parent
 
     published_url = ""
+    access_protected = False
+    access_password = ""
     published_path = parent / ".published.json"
     if published_path.is_file():
         try:
@@ -766,6 +968,9 @@ async def preview_mount(req: PreviewMountRequest):
             entry = pmap.get(artifact.name)
             if isinstance(entry, dict):
                 published_url = entry.get("url", "") or ""
+                if entry.get("requires_password"):
+                    access_protected = True
+                    access_password = entry.get("access_password", "") or ""
         except Exception:
             published_url = ""
 
@@ -774,7 +979,14 @@ async def preview_mount(req: PreviewMountRequest):
         "token": token,
         "entry": artifact.name,
         "relUrl": f"/artifacts/preview-asset/{token}/{artifact.name}",
+        # Stateless, stable, shareable URL for the same file. Preferred
+        # by the client over the token `relUrl` — works identically in
+        # desktop + web and survives restarts. `relUrl` is kept for
+        # back-compat / as a fallback when serveUrl can't be computed.
+        "serveUrl": _serve_url_for(artifact),
         "publishedUrl": published_url,
+        "accessProtected": access_protected,
+        "accessPassword": access_password,
     }
 
 
