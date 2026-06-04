@@ -336,6 +336,31 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
     setTimeout(onComplete, 800);
   };
 
+  // Web: ReactKeycloakProvider with onLoad:'login-required' redirects to Keycloak
+  // before the app renders. On remount after redirect, keycloak.authenticated is
+  // already true. Token keys are written to .env by web-main.tsx onAuthSuccess;
+  // here we just write the config keys to complete onboarding.
+  // On Electron the early return fires before the import, so keycloak-js is never
+  // loaded in the Electron renderer.
+  useEffect(() => {
+    if (!host.isWeb) return;
+    if (provider !== 'minds') return;
+    let cancelled = false;
+    import('../lib/keycloak').then(({ keycloak }) => {
+      if (cancelled || !keycloak.authenticated) return;
+      saveFinal([
+        'ANTON_TERMS_CONSENT=true',
+        'ANTON_MINDS_ENABLED=true',
+        'ANTON_MINDS_URL=https://api.mindshub.ai',
+        'ANTON_PLANNING_PROVIDER=openai-compatible',
+        'ANTON_CODING_PROVIDER=openai-compatible',
+        'ANTON_PLANNING_MODEL=latest:sonnet',
+        'ANTON_CODING_MODEL=latest:haiku',
+      ]);
+    });
+    return () => { cancelled = true; };
+  }, [provider]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Success: show only the confirmation graphic, hide everything else ──
   if (phase === 'success') {
     return (
@@ -384,31 +409,6 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
       'ANTON_CODING_MODEL=latest:haiku',
     ]);
   };
-
-  // Web: ReactKeycloakProvider with onLoad:'login-required' redirects to Keycloak
-  // before the app renders. On remount after redirect, keycloak.authenticated is
-  // already true. Token keys are written to .env by web-main.tsx onAuthSuccess;
-  // here we just write the config keys to complete onboarding.
-  // On Electron the early return fires before the import, so keycloak-js is never
-  // loaded in the Electron renderer.
-  useEffect(() => {
-    if (!host.isWeb) return;
-    if (provider !== 'minds') return;
-    let cancelled = false;
-    import('../lib/keycloak').then(({ keycloak }) => {
-      if (cancelled || !keycloak.authenticated) return;
-      saveFinal([
-        'ANTON_TERMS_CONSENT=true',
-        'ANTON_MINDS_ENABLED=true',
-        'ANTON_MINDS_URL=https://api.mindshub.ai',
-        'ANTON_PLANNING_PROVIDER=openai-compatible',
-        'ANTON_CODING_PROVIDER=openai-compatible',
-        'ANTON_PLANNING_MODEL=latest:sonnet',
-        'ANTON_CODING_MODEL=latest:haiku',
-      ]);
-    });
-    return () => { cancelled = true; };
-  }, [provider]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Step 2: BYOK LLM provider selection. Covers two entry points —
   //   1) `minds-no-llm` after a Minds validation succeeded but no LLM
