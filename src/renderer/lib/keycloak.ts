@@ -1,6 +1,6 @@
 import Keycloak from 'keycloak-js';
 
-const keycloakUrl = import.meta.env.VITE_KEYCLOAK_URL || 'https://auth.dev.mindshub.ai/auth';
+const keycloakUrl = import.meta.env.VITE_KEYCLOAK_URL || 'https://auth.mindshub.ai/auth';
 
 const keycloak = new Keycloak({
   url: keycloakUrl,

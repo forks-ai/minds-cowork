@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-const KEYCLOAK_BASE = 'https://auth.dev.mindshub.ai/auth';
+const KEYCLOAK_BASE = 'https://auth.mindshub.ai/auth';
 const KEYCLOAK_REALM = 'mindsdb';
 // `anton-desktop` is the native Keycloak client used for the loopback
 // PKCE flow in the desktop app.
@@ -16,11 +16,11 @@ const TOKEN_URL = `${KEYCLOAK_BASE}/realms/${KEYCLOAK_REALM}/protocol/openid-con
 // `mdb_*` API key minted here. We exchange the JWT for a key once at
 // finalize time and stash the key in ~/.anton/.env; the JWT itself
 // never reaches the LLM gateway.
-const AUTH_SERVICE_URL = 'https://auth.dev.mindshub.ai/v1';
+const AUTH_SERVICE_URL = 'https://auth.mindshub.ai/v1';
 
 // MindsHub LLM gateway base URL (OpenAI-compatible). Promote to
 // api.mindshub.ai when the desktop app moves to prod.
-const MINDS_LLM_BASE_URL = 'https://api.dev.mindshub.ai/v1';
+const MINDS_LLM_BASE_URL = 'https://api.mindshub.ai/v1';
 
 // Stable name we register the API key under. Listing + deleting any
 // pre-existing entry with this name before creating a new one keeps
@@ -533,6 +533,9 @@ const MINDS_KEYS = [
   'ANTON_CODING_PROVIDER',
   'ANTON_PLANNING_MODEL',
   'ANTON_CODING_MODEL',
+  'ANTON_ANTHROPIC_API_KEY',
+  'ANTON_OPENAI_API_KEY_CUSTOM',
+  'ANTON_GEMINI_API_KEY',
 ];
 
 // Writes the MindsHub LLM credentials to ~/.anton/.env (merge, not
@@ -560,6 +563,31 @@ export async function writeMindsKeyToEnvAndRestart(apiKey: string): Promise<void
     'ANTON_CODING_MODEL=latest:haiku',
   );
   fs.writeFileSync(envPath, lines.filter(Boolean).join('\n') + '\n', 'utf-8');
+
+  // Also clean up old provider entries from state.json so they don't show as green in Settings
+  const statePath = path.join(os.homedir(), '.anton', 'cowork', 'state.json');
+  try {
+    if (fs.existsSync(statePath)) {
+      const raw = fs.readFileSync(statePath, 'utf-8');
+      const state = JSON.parse(raw) as any;
+      if (state?.preferences?.providers && Array.isArray(state.preferences.providers)) {
+        // Keep only minds-cloud provider; remove anthropic, openai, gemini, openai-compatible
+        state.preferences.providers = state.preferences.providers.filter(
+          (p: any) => p?.type === 'minds-cloud'
+        );
+        // Ensure minds-cloud is marked as default
+        for (const p of state.preferences.providers) {
+          if (p?.type === 'minds-cloud') {
+            p.isDefault = true;
+          }
+        }
+        fs.writeFileSync(statePath, JSON.stringify(state, null, 2) + '\n', 'utf-8');
+      }
+    }
+  } catch (error) {
+    console.warn('[minds-auth] failed to clean up provider state', error);
+  }
+
   await stopServer();
   await startServer();
 }
