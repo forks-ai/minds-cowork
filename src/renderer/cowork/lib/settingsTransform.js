@@ -179,11 +179,18 @@ function backfillProviders(result) {
     ? result.providers.map((p) => ({ ...p, type: providerValueToType(p.type) }))
     : [];
   const hasType = (t) => providers.some((p) => p.type === t);
-  const activeTypes = [
-    providerValueToType(result.planningProvider),
-    providerValueToType(result.codingProvider),
-  ].filter(Boolean);
-  const planningType = providerValueToType(result.planningProvider);
+  const rawPlanningType = providerValueToType(result.planningProvider);
+  const rawCodingType = providerValueToType(result.codingProvider);
+
+  // When providers are set to openai-compatible but a MindsHub API key
+  // exists, the real provider is minds-cloud (the gateway is OpenAI-
+  // compatible under the hood). Promote so the UI shows a MindsHub card
+  // instead of a phantom empty OpenAI-compatible row.
+  const isMindsBacked = result.mindsApiKey === '***';
+  const planningType = (rawPlanningType === 'openai-compatible' && isMindsBacked) ? 'minds-cloud' : rawPlanningType;
+  const codingType = (rawCodingType === 'openai-compatible' && isMindsBacked) ? 'minds-cloud' : rawCodingType;
+
+  const activeTypes = [planningType, codingType].filter(Boolean);
 
   for (const type of activeTypes) {
     if (!hasType(type) && STATIC_SETTINGS.providerTypes.includes(type)) {
@@ -201,10 +208,9 @@ function backfillProviders(result) {
       isDefault: planningType === 'minds-cloud',
     });
   }
-  // Skip OpenAI backfill when the active provider is minds_cloud — the
+  // Skip OpenAI backfill when the active provider is minds-cloud — the
   // stored openai_api_key may just be the Minds key copied during legacy
   // onboarding, and showing a phantom OpenAI card for it is confusing.
-  const isMindsBacked = planningType === 'minds-cloud';
   if (result.openaiApiKey === '***' && !hasType('openai') && !isMindsBacked) {
     providers.push({ type: 'openai', apiKey: '***', isDefault: planningType === 'openai' });
   }

@@ -352,8 +352,8 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
         'ANTON_TERMS_CONSENT=true',
         'ANTON_MINDS_ENABLED=true',
         'ANTON_MINDS_URL=https://api.mindshub.ai',
-        'ANTON_PLANNING_PROVIDER=openai-compatible',
-        'ANTON_CODING_PROVIDER=openai-compatible',
+        'ANTON_PLANNING_PROVIDER=minds-cloud',
+        'ANTON_CODING_PROVIDER=minds-cloud',
         'ANTON_PLANNING_MODEL=latest:sonnet',
         'ANTON_CODING_MODEL=latest:haiku',
       ]);
@@ -403,8 +403,8 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
       'ANTON_TERMS_CONSENT=true',
       'ANTON_MINDS_ENABLED=true',
       'ANTON_MINDS_URL=https://api.mindshub.ai',
-      'ANTON_PLANNING_PROVIDER=openai-compatible',
-      'ANTON_CODING_PROVIDER=openai-compatible',
+      'ANTON_PLANNING_PROVIDER=minds-cloud',
+      'ANTON_CODING_PROVIDER=minds-cloud',
       'ANTON_PLANNING_MODEL=latest:sonnet',
       'ANTON_CODING_MODEL=latest:haiku',
     ]);
