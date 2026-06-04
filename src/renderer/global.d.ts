@@ -63,7 +63,7 @@ interface AntonTronAPI {
     expires_in?: number;
   }>;
   mindshubRefresh: () => Promise<{ ok: boolean; reason?: string; access_token?: string }>;
-  mindshubFinalize: () => Promise<{ ok: boolean; reason?: string; upgradeRequired?: boolean }>;
+  mindshubFinalize: () => Promise<{ ok: boolean; reason?: string; upgradeRequired?: boolean; apiKey?: string }>;
   mindshubGetCachedToken: () => Promise<{ access_token: string | null }>;
   getAccessToken: () => Promise<string | null>;
   logout: () => Promise<void>;

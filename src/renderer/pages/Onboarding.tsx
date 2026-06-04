@@ -398,8 +398,10 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
       setErrorMsg(finalizeResult.reason || 'Failed to set up MindsHub. Please try again.');
       return;
     }
-    // API key is now written to env by mindshubFinalize, save config keys to complete onboarding
-    await saveFinal([
+    // API key is now written to env by mindshubFinalize; include it in
+    // saveFinal so syncToBackend writes it to the DB as well (the DB is
+    // authoritative for cowork-server — .env alone isn't enough).
+    const lines = [
       'ANTON_TERMS_CONSENT=true',
       'ANTON_MINDS_ENABLED=true',
       'ANTON_MINDS_URL=https://api.mindshub.ai',
@@ -407,7 +409,13 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
       'ANTON_CODING_PROVIDER=minds-cloud',
       'ANTON_PLANNING_MODEL=latest:sonnet',
       'ANTON_CODING_MODEL=latest:haiku',
-    ]);
+    ];
+    if (finalizeResult.apiKey) {
+      lines.push(`ANTON_MINDS_API_KEY=${finalizeResult.apiKey}`);
+      lines.push(`ANTON_OPENAI_API_KEY=${finalizeResult.apiKey}`);
+      lines.push(`ANTON_OPENAI_BASE_URL=https://api.mindshub.ai/v1`);
+    }
+    await saveFinal(lines);
   };
 
   // Step 2: BYOK LLM provider selection. Covers two entry points —

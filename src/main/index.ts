@@ -488,7 +488,7 @@ function setupIPC() {
       return { ok: false, reason: result.error || 'Could not provision a MindsHub API key.' };
     }
     await writeMindsKeyToEnvAndRestart(result.key);
-    return { ok: true };
+    return { ok: true, apiKey: result.key };
   });
 
   // Returns the in-memory access token if one is cached (e.g. boot-
