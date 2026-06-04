@@ -22,7 +22,7 @@ import {
   getSelectedMethod, subscribeSelectedMethod, setSelectedMethod,
 } from './formStore';
 
-import { saveConnector, startGoogleDriveAuth, startGoogleCalendarAuth, startGmailAuth, startGoogleAdsAuth, startGoogleAnalyticsAuth, startGcpAuth, fetchIntegrations, fetchDatasources } from '../../api';
+import { saveConnector, startGoogleDriveAuth, startGoogleCalendarAuth, startGmailAuth, startGoogleAdsAuth, startGoogleAnalyticsAuth, startGcpAuth, fetchIntegrations, fetchDatasources, startConnectorOAuth, pollConnectorOAuth } from '../../api';
 import { host } from '../../../platform/host';
 
 const BROWSER_OAUTH_START = {
@@ -250,6 +250,7 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
     // `wireMethodId` falls through to `authMethod` for ordinary
     // (non-synthetic) methods so create-flow behaviour is unchanged.
     const wireMethodId = activeMethodSpec?._underlying_method || authMethod;
+    const connectionName = spec._existing_name || spec.name || '';
     if (activeMethodSpec?.submit_action === 'oauth_launch' && kind === 'primary') {
       const oauthMeta = activeMethodSpec.oauth || {};
       const clientId = oauthMeta.client_id || (values && values.client_id) || '';
@@ -262,6 +263,105 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
         setError('OAuth metadata is incomplete in the connector spec (auth_url / token_url / scopes).');
         return;
       }
+
+      // ── Web shell: redirect-based OAuth ──────────────────────────
+      // No Electron main process → no loopback PKCE. Drive the
+      // server-side redirect flow instead: server mints the auth URL,
+      // we open it, the provider redirects to the server callback
+      // (which exchanges the code AND saves the vault record), and we
+      // poll for the outcome. Requires a connector id — an LLM-emitted
+      // form without one can't use this path (the server keys the
+      // save on the connector id).
+      if (host.isWeb) {
+        const connectorId = spec._connector_id || null;
+        if (!connectorId) {
+          setError('This connector cannot be authorized in the browser (no connector id). Use the desktop app.');
+          return;
+        }
+        setBusy(true);
+        // Open the popup window SYNCHRONOUSLY, inside the click gesture,
+        // BEFORE the async `startConnectorOAuth`. If we opened it after
+        // the await, the broken user-gesture chain would trip popup
+        // blockers. We point it at about:blank now and redirect it to
+        // the real auth URL once the server returns it. Falls back to
+        // host.openExternal if the browser still blocked the popup.
+        let popup = null;
+        try { popup = window.open('', '_blank'); } catch { popup = null; }
+        try {
+          const started = await startConnectorOAuth(connectorId, {
+            method: wireMethodId || activeMethodSpec.id || null,
+            name: spec._existing_name || '',
+            clientId,
+            clientSecret,
+          });
+          if (!started?.authUrl || !started?.state) {
+            if (popup) { try { popup.close(); } catch {} }
+            setError('Could not start the OAuth flow.');
+            setBusy(false);
+            return;
+          }
+          // Send the (already-open) tab to the consent screen. The
+          // callback renders its own "you can close this tab" page
+          // server-side. If the popup was blocked, fall back to the
+          // host's opener (new tab or, in Electron, the OS browser).
+          if (popup) {
+            try { popup.location.href = started.authUrl; }
+            catch { await host.openExternal(started.authUrl); }
+          } else {
+            await host.openExternal(started.authUrl);
+          }
+
+          // Poll until the server-side callback reports a terminal
+          // state. ~3 min budget at 2s intervals; the server's pending
+          // entry expires at 10 min so this never polls a dead state
+          // forever.
+          const POLL_MS = 2000;
+          const MAX_POLLS = 90;
+          let outcome = null;
+          for (let i = 0; i < MAX_POLLS; i++) {
+            await new Promise((r) => setTimeout(r, POLL_MS));
+            let status;
+            try {
+              status = await pollConnectorOAuth(started.state);
+            } catch {
+              continue; // transient — keep polling
+            }
+            if (status?.status === 'success') { outcome = status; break; }
+            if (status?.status === 'error') {
+              setError(status.error || 'OAuth flow failed.');
+              setBusy(false);
+              return;
+            }
+            if (status?.status === 'expired') {
+              setError('The sign-in expired before it completed. Try again.');
+              setBusy(false);
+              return;
+            }
+            // 'pending' → keep waiting.
+          }
+          if (!outcome) {
+            setError('Timed out waiting for the OAuth sign-in to complete.');
+            setBusy(false);
+            return;
+          }
+          // The server callback already persisted the connection — just
+          // flip the form into its success branch + recap in chat.
+          patchForm(conversationId, {
+            form_id: spec.form_id,
+            _is_success: true,
+            title: `${outcome.label || connectorId} connected`,
+            subtitle: 'Saved to Anton\'s data vault. Anton can use this connection in tasks.',
+          });
+          onContinue?.({
+            text: `Connected ${outcome.label || connectorId} — saved to the data vault.`,
+          });
+        } catch (e) {
+          setError(e?.message || 'OAuth flow failed.');
+          setBusy(false);
+        }
+        return;
+      }
+
       setBusy(true);
       try {
         const result = await host.oauthConnect({
@@ -309,7 +409,7 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
               // (`(engine, name)` is the row key). Without this the
               // server falls back to `uuid.uuid4().hex[:8]` and we
               // end up with a sibling entry instead of an update.
-              name: spec._existing_name || '',
+              name: connectionName,
               values: oauthValues,
             });
             // Flip the form into its success branch so the user gets
@@ -319,7 +419,7 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
               form_id: spec.form_id,
               _is_success: true,
               title: `${saved.label || connectorId} connected`,
-              subtitle: 'Saved to Anton\'s data vault. Anton can use this connection in tasks.',
+              subtitle: 'Saved to the data vault. The agent can use this connection in tasks.',
             });
             // Surface a one-line confirmation in the chat too.
             onContinue?.({
@@ -342,6 +442,8 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
               : spec,
             values: oauthValues,
             skipped: skipped || [],
+            name: connectionName,
+            method: wireMethodId || null,
           });
         }
       } catch (e) {
@@ -375,6 +477,8 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
             : spec,
           values: values || {},
           skipped: skipped || [],
+          name: connectionName,
+          method: wireMethodId || null,
         });
         // Don't await — the stream pumps events into ChatView state
         // directly. We can drop the local busy flag; the Composer's
@@ -389,6 +493,8 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
           formSpec: spec,
           values: values || {},
           skipped: skipped || [],
+          name: connectionName,
+          method: wireMethodId || null,
         });
         onContinue?.(buildContinuation({
           spec, action: id, kind,
@@ -643,7 +749,7 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
                       form_id: spec.form_id,
                       _is_success: true,
                       title: successTitle,
-                      subtitle: "Saved to Anton's data vault. Anton can now use this connection in tasks.",
+                      subtitle: "Saved to the data vault. The agent can now use this connection in tasks.",
                     });
                   }
                 } catch { /* keep polling */ }

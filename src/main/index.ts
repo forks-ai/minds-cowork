@@ -7,6 +7,7 @@ import * as http from 'http';
 import { IPC } from '../shared/ipc-channels';
 import { checkInstallStatus, runInstaller } from './installer';
 import { startServer, stopServer, isServerRunning, isServerStarting, getServerPort, getServerDiagnostics } from './server-process';
+import { maybeUpdateServer, setUpdateNotifier } from './server-updater';
 import { oauthConnect } from './oauth-service';
 import { sendEvent } from './analytics';
 import { getRendererPath, getBundledPath, checkForUIUpdate, applyUIUpdate, hasInternet, getCachedVersion } from './ui-updater';
@@ -50,10 +51,10 @@ function getDevMode(): string | null {
   return val; // 'live' or 'full'
 }
 
-/** Read UI_UPDATE_MODE from ~/.anton/.env. Defaults to 'manual'. */
+/** Read UI_UPDATE_MODE from ~/.anton/.env. Defaults to 'auto'. */
 function getUpdateMode(): 'auto' | 'manual' {
   const vars = readEnvFile();
-  return vars.UI_UPDATE_MODE === 'auto' ? 'auto' : 'manual';
+  return vars.UI_UPDATE_MODE === 'manual' ? 'manual' : 'auto';
 }
 
 function checkConfigured(): { configured: boolean; provider: string } {
@@ -61,8 +62,14 @@ function checkConfigured(): { configured: boolean; provider: string } {
   if (vars.ANTON_ANTHROPIC_API_KEY) {
     return { configured: true, provider: 'anthropic' };
   }
-  if (vars.ANTON_OPENAI_API_KEY && vars.ANTON_OPENAI_BASE_URL) {
+  if (vars.ANTON_MINDS_API_KEY) {
     return { configured: true, provider: 'minds' };
+  }
+  if (vars.ANTON_OPENAI_API_KEY && vars.ANTON_OPENAI_BASE_URL) {
+    return { configured: true, provider: 'openai' };
+  }
+  if (vars.ANTON_OPENAI_API_KEY) {
+    return { configured: true, provider: 'openai' };
   }
   return { configured: false, provider: '' };
 }
@@ -413,6 +420,18 @@ function setupIPC() {
     return readEnvFile();
   });
 
+  ipcMain.handle(IPC.SERVER_RESTART, async () => {
+    console.log('[server] restart requested (post-onboarding)');
+    await stopServer();
+    const result = await startServer({});
+    if (result.ok) {
+      console.log(`[server] restarted on http://127.0.0.1:${result.port}`);
+    } else {
+      console.error(`[server] restart failed: ${result.reason}`);
+    }
+    return result;
+  });
+
   ipcMain.handle(IPC.SETTINGS_SAVE, async (_event, content: string) => {
     const antonDir = path.join(os.homedir(), '.anton');
     if (!fs.existsSync(antonDir)) {
@@ -599,6 +618,22 @@ app.whenReady().then(() => {
       console.error(`[server] start failed: ${result.reason}`);
     } else {
       console.log(`[server] running on http://127.0.0.1:${result.port}`);
+      // Background update check — runs after the server is already
+      // serving so users aren't blocked. If a newer version is found
+      // on PyPI, stops the server, upgrades, and restarts. Rolls back
+      // automatically if the new version fails the health probe.
+      setUpdateNotifier((payload) => {
+        mainWindow?.webContents.send(IPC.SERVER_UPDATE_STATUS, payload);
+      });
+      maybeUpdateServer().then((updateResult) => {
+        if (updateResult.updated) {
+          console.log(`[server-updater] updated ${updateResult.previousVersion} → ${updateResult.newVersion}`);
+        } else if (updateResult.error) {
+          console.error(`[server-updater] ${updateResult.error}`);
+        }
+      }).catch((err) => {
+        console.error('[server-updater] check failed:', err);
+      });
     }
   }).catch((err) => {
     console.error('[server] check-and-start failed:', err);

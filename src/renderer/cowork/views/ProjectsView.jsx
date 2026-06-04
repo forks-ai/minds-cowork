@@ -1113,6 +1113,7 @@ export default function ProjectsView({
   // Forwarded to ProjectDetail's rail Scheduled Tasks card —
   // clicking a row routes to the schedule detail page.
   onOpenSchedule,
+  agentLabel = 'the agent',
 }) {
   const { pinned, togglePin } = usePinnedProjects();
   const { isMobile } = useBreakpoint();
@@ -1284,7 +1285,7 @@ export default function ProjectsView({
     }}>
       <PageHeader
         title="Projects"
-        subtitle="Workspaces Anton uses to group conversations, memory, and outputs."
+        subtitle={`Workspaces ${agentLabel} uses to group conversations, memory, and outputs.`}
         actions={<NewProjectButton onClick={handleNewProject} />}
         // Bake the breathing room into the header itself rather than a
         // sibling spacer. The previous 18px spacer div collapsed in

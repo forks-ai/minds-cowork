@@ -1,34 +1,80 @@
 import { useState } from 'react';
 import { host } from '../platform/host';
+import { BASE } from '../cowork/api';
+import { PROVIDER_MODELS } from '../cowork/lib/settingsTransform';
 import OrbitMorph from '../cowork/components/ui/OrbitMorph';
 
 type Provider = 'minds' | 'byok';
 type ByokProvider = 'anthropic' | 'openai' | 'gemini' | 'openai-compatible';
 type Phase = 'choose' | 'validating' | 'minds-no-llm' | 'success' | 'error';
 
-const ANTHROPIC_MODELS = [
-  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
-  { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
-  { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
-];
-
-const OPENAI_MODELS = [
-  { id: 'gpt-5.4', label: 'GPT-5.4' },
-  { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
-  { id: 'o3', label: 'o3' },
-  { id: 'o4-mini', label: 'o4 Mini' },
-];
-
-const GEMINI_MODELS = [
-  { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash' },
-  { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-  { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
-];
+const ANTHROPIC_MODELS = PROVIDER_MODELS.anthropic;
+const OPENAI_MODELS = PROVIDER_MODELS.openai;
+const GEMINI_MODELS = PROVIDER_MODELS.gemini;
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
 const MINDS_REGISTER_URL = 'https://auth.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/registrations?client_id=public-client&response_type=code&scope=openid&redirect_uri=https%3A%2F%2Fconsole.mindshub.ai';
 
 const CUSTOM_MODEL = '__custom__';
+
+// Env-var names (ANTON_FOO_BAR) → backend setting keys (foo_bar).
+const ENV_TO_SETTING: Record<string, string> = {
+  ANTON_ANTHROPIC_API_KEY: 'anthropic_api_key',
+  ANTON_OPENAI_API_KEY: 'openai_api_key',
+  ANTON_OPENAI_BASE_URL: 'openai_base_url',
+  ANTON_MINDS_API_KEY: 'minds_api_key',
+  ANTON_MINDS_URL: 'minds_url',
+  ANTON_PLANNING_PROVIDER: 'planning_provider',
+  ANTON_CODING_PROVIDER: 'coding_provider',
+  ANTON_PLANNING_MODEL: 'planning_model',
+  ANTON_CODING_MODEL: 'coding_model',
+  ANTON_MEMORY_MODE: 'memory_mode',
+  ANTON_EPISODIC_MEMORY: 'episodic_memory',
+};
+
+/** Push onboarding settings to the cowork-server backend DB. */
+async function syncToBackend(lines: string[]): Promise<void> {
+  // Collect all env values first so we can detect MindsHub vs generic
+  // openai-compatible. The .env always writes "openai-compatible" for
+  // both, but the backend Provider enum distinguishes "minds_cloud"
+  // (uses minds_api_key + minds_url) from "openai_compatible" (uses
+  // openai_api_key + openai_base_url). build_llm_client() only handles
+  // minds_cloud today, so we must map correctly here.
+  const envMap: Record<string, string> = {};
+  for (const line of lines) {
+    const eq = line.indexOf('=');
+    if (eq <= 0) continue;
+    envMap[line.slice(0, eq)] = line.slice(eq + 1);
+  }
+  const hasMindKey = Boolean(envMap.ANTON_MINDS_API_KEY);
+
+  for (const [envKey, value] of Object.entries(envMap)) {
+    const settingKey = ENV_TO_SETTING[envKey];
+    if (!settingKey) continue;
+    let dbValue = value;
+    // The .env uses hyphens (openai-compatible) for both MindsHub and
+    // generic endpoints. The backend Provider enum uses underscores and
+    // has separate values: "minds_cloud" vs "openai_compatible".
+    if (settingKey.endsWith('_provider')) {
+      if (dbValue === 'openai-compatible' && hasMindKey) {
+        dbValue = 'minds_cloud';
+      } else {
+        dbValue = dbValue.replace(/-/g, '_');
+      }
+    }
+    try {
+      await fetch(`${BASE}/settings/${encodeURIComponent(settingKey)}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: dbValue }),
+      });
+    } catch {
+      // Best-effort — the .env is the source of truth for the Electron
+      // main process; the backend will pick it up on next restart even
+      // if this call fails.
+    }
+  }
+}
 
 function StepIndicator({ step }: { step: 1 | 2 }) {
   const dot = (n: 1 | 2) => ({
@@ -117,6 +163,9 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
     lines.push('ANTON_MEMORY_MODE=autopilot');
     lines.push('ANTON_EPISODIC_MEMORY=true');
     await host.saveSettings(lines.join('\n'));
+    // Also push to the cowork-server backend DB so the health endpoint
+    // reports configReady=true immediately (without a server restart).
+    await syncToBackend(lines);
     setPhase('success');
     setTimeout(onComplete, 800);
   };
@@ -152,13 +201,14 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
       );
 
       if (llmResult.ok) {
-        // Full Minds setup — LLM works
+        // Full Minds setup — LLM works.
+        // Do NOT copy the Minds key into ANTON_OPENAI_API_KEY — the server
+        // reads minds_api_key for the minds_cloud provider. Duplicating it
+        // into the OpenAI slot causes a phantom OpenAI card in Settings.
         const lines = [
           ...mindsLines,
-          `ANTON_OPENAI_API_KEY=${apiKey.trim()}`,
-          `ANTON_OPENAI_BASE_URL=${mindsBase}/v1`,
-          'ANTON_PLANNING_PROVIDER=openai-compatible',
-          'ANTON_CODING_PROVIDER=openai-compatible',
+          'ANTON_PLANNING_PROVIDER=minds-cloud',
+          'ANTON_CODING_PROVIDER=minds-cloud',
           'ANTON_PLANNING_MODEL=_reason_',
           'ANTON_CODING_MODEL=_code_',
         ];
@@ -279,9 +329,30 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
 
     const lines = Object.entries(merged).map(([k, v]) => `${k}=${v}`);
     await host.saveSettings(lines.join('\n'));
+    await syncToBackend(lines);
     setPhase('success');
     setTimeout(onComplete, 800);
   };
+
+  // ── Success: show only the confirmation graphic, hide everything else ──
+  if (phase === 'success') {
+    return (
+      <div className="onboard-content-inner">
+        <div style={{
+          display: 'flex', flexDirection: 'column', alignItems: 'center',
+          gap: 14, padding: '48px 0',
+          animation: 'fadeInUp 0.4s ease-out both',
+        }}>
+          <OrbitMorph state="done" size={72} title="Connected" />
+          <span style={{
+            fontFamily: 'var(--font-mono)', fontSize: 11.5,
+            color: 'var(--accent, #7CC4B6)', letterSpacing: '0.10em',
+            textTransform: 'uppercase',
+          }}>Connected</span>
+        </div>
+      </div>
+    );
+  }
 
   // Step 2: BYOK LLM provider selection. Covers two entry points —
   //   1) `minds-no-llm` after a Minds validation succeeded but no LLM
@@ -320,7 +391,7 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
               maxWidth: 456, textAlign: 'left',
             }}>
               {skippedMinds
-                ? 'You skipped MindsHub. Pick an LLM provider for Anton to use. You can add MindsHub later from Settings → Providers — it\'s required to publish artifacts to the web.'
+                ? 'You skipped MindsHub. Pick an LLM provider for the agent to use. You can add MindsHub later from Settings → Providers — it\'s required to publish artifacts to the web.'
                 : 'Your MindsHub API key is valid and saved for publishing and data connectors. However, you don\'t seem to have LLM credits. Top up your balance or pick an LLM provider below.'}
             </div>
 
@@ -602,21 +673,6 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
             color: 'var(--text-muted)', letterSpacing: '0.10em',
             textTransform: 'uppercase',
           }}>Validating connection\u2026</span>
-        </div>
-      )}
-
-      {phase === 'success' && (
-        <div style={{
-          display: 'flex', flexDirection: 'column', alignItems: 'center',
-          gap: 14, padding: '20px 0 8px',
-          animation: 'fadeInUp 0.4s ease-out both',
-        }}>
-          <OrbitMorph state="done" size={64} title="Connected" />
-          <span style={{
-            fontFamily: 'var(--font-mono)', fontSize: 11.5,
-            color: 'var(--accent, #7CC4B6)', letterSpacing: '0.10em',
-            textTransform: 'uppercase',
-          }}>Connected</span>
         </div>
       )}
 

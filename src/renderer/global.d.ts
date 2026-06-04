@@ -10,6 +10,7 @@ interface AntonTronAPI {
 
   readSettings: () => Promise<Record<string, string>>;
   saveSettings: (content: string) => Promise<boolean>;
+  restartServer: () => Promise<void>;
   checkConfigured: () => Promise<{ configured: boolean; provider: string }>;
   validateProvider: (provider: string, apiKey: string, baseUrl?: string, model?: string) =>
     Promise<{ ok: boolean; error?: string }>;
@@ -57,6 +58,8 @@ interface AntonTronAPI {
 }
 
 declare global {
+  /** Injected by Vite at build time from package.json `version`. */
+  const __APP_VERSION__: string;
   interface Window {
     antontron: AntonTronAPI;
   }

@@ -323,12 +323,12 @@ export default function TermsConsent({ onAccept }: { onAccept: () => void }) {
           disabled={!accepted}
           onClick={onAccept}
         >
-          SETUP ANTON
+          GET STARTED
         </button>
         {/* Short explainer beneath the CTA — reassures the user that
-            "Setup Anton" is just an install, not a credential dance. */}
+            this is just an install, not a credential dance. */}
         <p className="terms-setup-note">
-          We&rsquo;ll install and prepare the system dependencies Anton needs.
+          We&rsquo;ll install and prepare the system dependencies Minds Cowork needs.
           Takes about a minute.
         </p>
     </div>

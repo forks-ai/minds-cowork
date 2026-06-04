@@ -1087,7 +1087,7 @@ function ArtifactRow({ artifact, projects, onOpenViewer, onPublish: doPublish, o
 
 // ─── Empty state ─────────────────────────────────────────────────────────
 
-function EmptyState() {
+function EmptyState({ agentLabel = 'the agent' }) {
   return (
     <div style={{
       flex: 1, minHeight: 360,
@@ -1099,7 +1099,7 @@ function EmptyState() {
         No artifacts yet
       </div>
       <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, color: 'var(--ink-3)', maxWidth: 380, textAlign: 'center' }}>
-        When Anton creates documents, dashboards, or code outputs they'll appear here.
+        When {agentLabel} creates documents, dashboards, or code outputs they'll appear here.
       </div>
     </div>
   );
@@ -1151,7 +1151,7 @@ function Toast({ kind, message, onClose }) {
 
 // ─── Composed view ───────────────────────────────────────────────────────
 
-export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, projects = [], onOpenProject }) {
+export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, projects = [], onOpenProject, agentLabel = 'the agent' }) {
   const [list, setList] = useState(initial);
   const [viewer, setViewer] = useState(null);
   const { isMobile } = useBreakpoint();
@@ -1362,7 +1362,7 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
     }}>
       <PageHeader
         title="Live Artifacts"
-        subtitle="Documents, dashboards, and code Anton produces. Publish to share a live URL."
+        subtitle={`Documents, dashboards, and code ${agentLabel} produces. Publish to share a live URL.`}
         // 20px below the subtitle text so the page reads with a
         // little air before the search-row begins. The 20px spacer
         // below the header still adds the standard between-section
@@ -1416,7 +1416,7 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
       )}
 
       {total === 0 ? (
-        <EmptyState />
+        <EmptyState agentLabel={agentLabel} />
       ) : effectiveView === 'grid' ? (
         <div className="artifacts-grid" style={{
           padding: '6px 32px 60px',

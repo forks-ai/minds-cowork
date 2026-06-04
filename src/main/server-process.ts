@@ -7,7 +7,7 @@
 // binary installed via `uv tool install cowork-server`. No bundled source
 // directory needed — the installer handles package installation.
 
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, execFile, ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as os from 'os';
@@ -53,6 +53,36 @@ function appendStderr(chunk: string) {
   recentStderr = (recentStderr + chunk).slice(-STDERR_BUFFER_BYTES);
 }
 
+// Kill a child process and its entire process group (POSIX). When we
+// spawn with detached:true the child leads its own group, so
+// process.kill(-pid) reaches grandchildren (e.g. python spawned by uv).
+// Falls back to child.kill() on Windows or if the group kill fails.
+function killTree(proc: ChildProcess, signal: NodeJS.Signals): void {
+  if (process.platform !== 'win32' && proc.pid) {
+    try { process.kill(-proc.pid, signal); return; } catch {}
+  }
+  try { proc.kill(signal); } catch {}
+}
+
+// Find and kill the process listening on a port. Used to reap orphaned
+// servers that we adopted but don't have a ChildProcess handle for.
+// Best-effort — failures are silently ignored.
+async function killProcessOnPort(port: number): Promise<void> {
+  if (process.platform === 'win32') return; // lsof not available
+  return new Promise<void>((resolve) => {
+    execFile('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { timeout: 3000 }, (err, stdout) => {
+      if (err || !stdout.trim()) { resolve(); return; }
+      for (const pidStr of stdout.trim().split('\n')) {
+        const pid = Number(pidStr);
+        if (pid > 0) {
+          try { process.kill(pid, 'SIGTERM'); } catch {}
+        }
+      }
+      resolve();
+    });
+  });
+}
+
 export function getServerPort(): number {
   return serverPort;
 }
@@ -71,7 +101,7 @@ function getUvPath(): string | null {
 }
 
 // Build a PATH with ~/.local/bin and ~/.cargo/bin prepended. Critical
-// for macOS (and to a lesser extent Linux) GUI launches: when Anton.app
+// for macOS (and to a lesser extent Linux) GUI launches: when Minds Cowork.app
 // starts from Finder/Dock, process.env.PATH is the minimal launchd PATH
 // (`/usr/bin:/bin:/usr/sbin:/sbin`) — shell init files aren't read,
 // so `~/.local/bin` (where the installer puts `uv`) is missing.
@@ -140,6 +170,7 @@ export async function startServer(opts: { port?: number; readyTimeoutMs?: number
   // instead of spawning a second python that would clash on the port.
   if (pendingStart) return pendingStart;
 
+  // TODO: Remove ANTON_SERVER_PORT fallback once migration period is over
   serverPort = opts.port ?? (Number(process.env.COWORK_SERVER_PORT) || Number(process.env.ANTON_SERVER_PORT) || DEFAULT_PORT);
 
   // Pre-flight: somebody might already be on our port. The most
@@ -152,16 +183,16 @@ export async function startServer(opts: { port?: number; readyTimeoutMs?: number
   const alreadyHealthy = await probeHealth(500);
   if (alreadyHealthy) {
     serverStarted = true;
+    _adoptedExternal = true;
     lastStartError = null;
     console.log(`[server] adopted existing instance on port ${serverPort}`);
     return { ok: true, port: serverPort };
   }
 
-  // 45s ceiling so the python's in-process `_maybe_self_update_and_reexec`
-  // has room to download + install + execv when a new release lands.
-  // Steady-state boots respond in <2s; only the update-on-launch path
-  // pushes us past 15s. Lower would risk timing out a valid update.
-  const readyTimeoutMs = opts.readyTimeoutMs ?? 45000;
+  // 15s is plenty for a normal boot (typically <2s). Updates are now
+  // handled by the Electron-side server-updater after the server is
+  // already serving, so no need for a long timeout here.
+  const readyTimeoutMs = opts.readyTimeoutMs ?? 15000;
 
   lastStartAt = Date.now();
   // A new start attempt invalidates the prior stop attribution —
@@ -170,6 +201,7 @@ export async function startServer(opts: { port?: number; readyTimeoutMs?: number
   // transition to "not running" reflects this start cycle's reason.
   lastStopIntentional = null;
   _stopRequested = false;
+  _adoptedExternal = false;
 
   // Determine how to spawn the server:
   //   Dev mode:  `uv run cowork-server` from the sibling source dir
@@ -210,10 +242,15 @@ export async function startServer(opts: { port?: number; readyTimeoutMs?: number
       COWORK_SERVER_HOST: SERVER_HOST,
     };
 
+    // detached: true on POSIX puts the child in its own process group so
+    // we can kill the entire tree (uv + grandchild python) with a single
+    // process.kill(-pid). Without this, SIGTERM only reaches `uv` and
+    // the grandchild python survives, holding the port.
     const child = spawn(spawnCmd, spawnArgs, {
       cwd: spawnCwd,
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
     });
 
     child.stdout.on('data', (d) => {
@@ -257,13 +294,13 @@ export async function startServer(opts: { port?: number; readyTimeoutMs?: number
       // bind-collide and fail the same way — making the "stop +
       // start" cycle look broken from the user's side. SIGTERM with
       // a SIGKILL fallback so a hung uvicorn boot can't outlive us.
-      try { child.kill('SIGTERM'); } catch {}
+      killTree(child, 'SIGTERM');
       const exited = new Promise<void>((resolve) => {
         child.once('exit', () => resolve());
       });
       await Promise.race([exited, new Promise<void>((r) => setTimeout(r, 2_000))]);
       if (child.exitCode === null && !child.killed) {
-        try { child.kill('SIGKILL'); } catch {}
+        killTree(child, 'SIGKILL');
         await Promise.race([exited, new Promise<void>((r) => setTimeout(r, 1_000))]);
       }
       if (serverProcess === child) serverProcess = null;
@@ -302,12 +339,15 @@ export async function stopServer(): Promise<void> {
   const proc = serverProcess;
   if (!proc) {
     serverStarted = false;
-    // Even with no live child, mark this as an intentional stop —
-    // a stopServer() call signals user/app intent, the absence of a
-    // child is just "already stopped." Keeps the modal from showing
-    // a stale "crashed" panel after the user re-clicked Stop on an
-    // already-stopped backend.
     lastStopIntentional = true;
+    // If we adopted an external server (no child handle), try to kill
+    // whatever is listening on the port so the next launch gets a clean
+    // slate. Without this, the orphan survives app quit and blocks the
+    // port indefinitely.
+    if (_adoptedExternal) {
+      _adoptedExternal = false;
+      await killProcessOnPort(serverPort);
+    }
     return;
   }
 
@@ -328,7 +368,7 @@ export async function stopServer(): Promise<void> {
     // race-with-timeout below covers us.
   });
 
-  try { proc.kill('SIGTERM'); } catch {}
+  killTree(proc, 'SIGTERM');
 
   await Promise.race([
     exited,
@@ -338,7 +378,7 @@ export async function stopServer(): Promise<void> {
   // Still alive? Force-kill. `proc.exitCode === null` means the child
   // hasn't reported an exit code yet → still running.
   if (proc.exitCode === null && !proc.killed) {
-    try { proc.kill('SIGKILL'); } catch {}
+    killTree(proc, 'SIGKILL');
     await Promise.race([
       exited,
       new Promise<void>((resolve) => setTimeout(resolve, 1_500)),
@@ -354,11 +394,20 @@ export async function stopServer(): Promise<void> {
   }
 }
 
+// Track whether we adopted an external server (no child process to manage)
+// vs spawned our own. When adopted, serverProcess is expected to be null.
+let _adoptedExternal = false;
+
 // True once /health has confirmed the python is responsive.
-// serverProcess may be null when we adopted an externally-started
-// server (e.g. dev running `uv run cowork-server` in a terminal).
+// When we spawned the child ourselves, also checks that the process
+// handle is still alive — prevents returning true after an unexpected
+// crash that nulled serverProcess via the exit handler.
+// When we adopted an externally-started server (no child to track),
+// trusts the serverStarted flag since we don't own the process.
 export function isServerRunning(): boolean {
-  return serverStarted;
+  if (!serverStarted) return false;
+  if (_adoptedExternal) return true;
+  return serverProcess !== null;
 }
 
 // True between spawn() and the first successful /health probe — i.e.

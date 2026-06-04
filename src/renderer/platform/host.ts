@@ -80,7 +80,7 @@ export function isLocalApiOrigin(): boolean {
 // stable callback URL the FastAPI backend exposes for that integration.
 export function getOAuthRedirectUri(integration: string): string | null {
   if (isElectron) return null;
-  return `${getApiOrigin()}/v1/oauth/callback/${integration}`;
+  return `${getApiOrigin()}/api/v1/oauth/callback/${integration}`;
 }
 
 // ---- Server lifecycle ---------------------------------------------------
@@ -237,15 +237,23 @@ export async function readSettings(): Promise<Record<string, string>> {
   if (isElectron && typeof bridge.readSettings === 'function') {
     return bridge.readSettings();
   }
-  return fetchJson('/v1/settings/raw');
+  return fetchJson('/api/v1/settings/raw');
 }
 
 export async function saveSettings(content: string): Promise<boolean> {
   if (isElectron && typeof bridge.saveSettings === 'function') {
     return bridge.saveSettings(content);
   }
-  await fetchJson('/v1/settings/raw', { method: 'POST', body: JSON.stringify({ content }) });
+  await fetchJson('/api/v1/settings/raw', { method: 'POST', body: JSON.stringify({ content }) });
   return true;
+}
+
+export async function restartServer(): Promise<void> {
+  if (isElectron && typeof bridge.restartServer === 'function') {
+    await bridge.restartServer();
+  }
+  // Web deployments don't need a restart — the server reads .env on
+  // each request in that context.
 }
 
 export interface InstallStatus {
@@ -257,14 +265,14 @@ export async function checkInstall(): Promise<InstallStatus> {
   if (isElectron && typeof bridge.checkInstall === 'function') {
     return bridge.checkInstall();
   }
-  return fetchJson('/v1/settings/install-status');
+  return fetchJson('/api/v1/settings/install-status');
 }
 
 export async function checkConfigured(): Promise<{ configured: boolean; provider: string }> {
   if (isElectron && typeof bridge.checkConfigured === 'function') {
     return bridge.checkConfigured();
   }
-  return fetchJson('/v1/settings/configured');
+  return fetchJson('/api/v1/settings/configured');
 }
 
 export async function validateProvider(
@@ -276,7 +284,7 @@ export async function validateProvider(
   if (isElectron && typeof bridge.validateProvider === 'function') {
     return bridge.validateProvider(provider, apiKey, baseUrl, model);
   }
-  return fetchJson('/v1/settings/validate-provider', {
+  return fetchJson('/api/v1/settings/validate-provider', {
     method: 'POST',
     body: JSON.stringify({ provider, apiKey, baseUrl, model }),
   });
@@ -426,6 +434,7 @@ export const host = {
   getUIVersion,
   readSettings,
   saveSettings,
+  restartServer,
   checkInstall,
   checkConfigured,
   validateProvider,

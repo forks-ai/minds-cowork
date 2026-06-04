@@ -45,7 +45,7 @@ function NavItem({ icon, label, active, onClick, badge, comingSoon, compact }) {
   );
 }
 
-function RecentItem({ task, onClick, projects, onPin, onUnpin, onRename, onDelete, onMoveToProject, showTimestamp = true, isActive = false }) {
+function RecentItem({ task, onClick, projects, onPin, onUnpin, onRename, onDelete, onMoveToProject, showTimestamp = true, isActive = false, agentLabel }) {
   const [hover, setHover] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [anchorRect, setAnchorRect] = useState(null);
@@ -117,7 +117,7 @@ function RecentItem({ task, onClick, projects, onPin, onUnpin, onRename, onDelet
             {isActive ? (
               <span
                 className="pulse-dot"
-                title="Anton is working on this task"
+                title={`${agentLabel || 'Anton'} is working on this task`}
                 aria-label="Active"
                 style={{
                   display: 'inline-block',
@@ -158,6 +158,7 @@ function RecentItem({ task, onClick, projects, onPin, onUnpin, onRename, onDelet
       <TaskMenu
         task={task}
         projects={projects}
+        agentLabel={agentLabel}
         open={menuOpen}
         anchorRect={anchorRect}
         onClose={() => setMenuOpen(false)}
@@ -210,6 +211,7 @@ export default function Sidebar({
   onShowServerHelp,
   updateAvailable = null, // { version: string } or null
   onApplyUpdate,
+  agentLabel,
   // Settings → Personalization → Show nav-panel counters. When
   // false, hide the per-nav badge counts AND the time-since slot
   // on each Recent row. Default true.
@@ -351,6 +353,8 @@ export default function Sidebar({
   const hasMoreRecents = false;
 
   const [recentsModalOpen, setRecentsModalOpen] = useState(false);
+
+
   const pinnedTasks = (pins || [])
     .filter((pin) => pin.item_type === 'conversation')
     .map((pin) => {
@@ -484,7 +488,7 @@ export default function Sidebar({
               userSelect: 'none',
             }}
           >·</span>
-          <div className="anton-sidebar__wordmark">Anton</div>
+          <div className="anton-sidebar__wordmark">Minds</div>
         </div>
       </div>
 
@@ -544,7 +548,7 @@ export default function Sidebar({
             Order: Memories → Skills library → Settings. Labels read
             as the things the user OWNS (plural collections) rather
             than the abstract concepts the engine names them after. */}
-        <div className="section-label">Anton</div>
+        <div className="section-label">{agentLabel || 'Anton'}</div>
         <div className="anton-group">
           <NavItem icon={Ico.brain(15)}    label="Memories"       onClick={() => onNavigate('memory')}   active={activeRoute === 'memory'}   compact />
           <NavItem icon={Ico.cube(15)}     label="Skills library" onClick={() => onNavigate('skills')}   active={activeRoute === 'skills'}   compact />
@@ -572,6 +576,7 @@ export default function Sidebar({
                 onMoveToProject={onMoveTaskToProject}
                 showTimestamp={showCounters}
                 isActive={activeTaskIds.has(task.id)}
+                agentLabel={agentLabel}
               />
             ))}
           </div>
@@ -650,6 +655,7 @@ export default function Sidebar({
                 onMoveToProject={isGroup ? undefined : onMoveTaskToProject}
                 showTimestamp={showCounters}
                 isActive={!isGroup && activeTaskIds.has(t.id)}
+                agentLabel={agentLabel}
               />
             );
           })}
@@ -787,7 +793,7 @@ export default function Sidebar({
               title={
                 serverBusy
                   ? `Backend ${serverBusyKind}…`
-                  : serverOnline ? 'Stop Anton backend' : 'Start Anton backend'
+                  : serverOnline ? `Stop ${agentLabel || 'Anton'} backend` : `Start ${agentLabel || 'Anton'} backend`
               }
               aria-label={serverOnline ? 'Stop backend' : 'Start backend'}
               aria-busy={serverBusy ? 'true' : undefined}
@@ -800,6 +806,8 @@ export default function Sidebar({
           </div>
         </div>
         )}
+
+        {/* Version is shown on the Settings page — no need to repeat here. */}
       </div>
 
       <RecentsModal

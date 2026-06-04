@@ -5,6 +5,7 @@
 
 import { initialStreamState, reduceStream } from './lib/responseStreamAdapter';
 import { host } from '../platform/host';
+import { transformSettingsRows, diffSettingsForWrite } from './lib/settingsTransform';
 
 const ANTON_SERVER_PORT = 26866;
 
@@ -332,7 +333,7 @@ function _streamResponse(text, { conversationId, projectName, projectPath, model
               onDone?.(cid);
               return;
             case 'response.failed':
-              onError?.(msg.error || msg.message || 'Anton failed', { ...msg, code: msg.code });
+              onError?.(msg.error || msg.message || 'The agent failed', { ...msg, code: msg.code });
               return;
             default:
               break;
@@ -453,7 +454,7 @@ export function tailInFlight(conversationId, {
               onDone?.(cid);
               return;
             case 'response.failed':
-              onError?.(msg.error || msg.message || 'Anton failed', { ...msg, code: msg.code });
+              onError?.(msg.error || msg.message || 'The agent failed', { ...msg, code: msg.code });
               return;
             default:
               break;
@@ -888,181 +889,82 @@ export async function revealArtifact(path) {
 }
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
+// Key maps, row transforms, provider backfill, and write-diffing live in
+// settingsTransform.js (pure functions, no network calls).  The API calls
+// here are thin wrappers that fetch/push and delegate the translation.
 
-// Bidirectional mapping between server snake_case keys and client camelCase keys.
-const _SETTINGS_KEY_MAP = {
-  anthropic_api_key: 'anthropicApiKey',
-  openai_api_key: 'openaiApiKey',
-  minds_api_key: 'mindsApiKey',
-  minds_url: 'mindsUrl',
-  planning_provider: 'planningProvider',
-  planning_model: 'planningModel',
-  coding_provider: 'codingProvider',
-  coding_model: 'codingModel',
-  openai_base_url: 'openaiBaseUrl',
-  model_mode: 'modelMode',
-  model_overrides: 'modelOverrides',
-  providers_json: 'providers',
-  auto_pin: 'autoPin',
-  show_dots: 'showDots',
-  show_counters: 'showCounters',
-  accent_variant: 'accentVariant',
-  memory_enabled: 'memoryEnabled',
-  memory_mode: 'memoryMode',
-  episodic_memory: 'episodicMemory',
-  proactive_dashboards: 'proactiveDashboards',
-  ui_update_mode: 'uiUpdateMode',
-  publish_url: 'publishUrl',
-  // These map 1:1
-  greeting: 'greeting',
-  tone: 'tone',
-  harness: 'harness',
-};
-const _CLIENT_TO_SERVER = Object.fromEntries(
-  Object.entries(_SETTINGS_KEY_MAP).map(([s, c]) => [c, s]),
-);
-
-// Fields whose server value is a JSON string that the client uses as an object.
-const _JSON_FIELDS = new Set(['modelOverrides', 'providers']);
-
-// Static metadata that used to come from the server but is purely client-side.
-const _STATIC_SETTINGS = {
-  providerTypes: ['minds-cloud', 'anthropic', 'openai', 'gemini', 'openai-compatible'],
-  providerTypeLabels: {
-    'minds-cloud': 'MindsHub',
-    anthropic: 'Anthropic',
-    openai: 'OpenAI',
-    gemini: 'Gemini',
-    'openai-compatible': 'OpenAI-compatible',
-  },
-  recommendedModels: {
-    'minds-cloud': ['_reason_', '_code_'],
-    anthropic: ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'],
-    openai: ['gpt-5.4', 'gpt-5.4-mini', 'o3', 'o4-mini'],
-    gemini: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-3-flash-preview'],
-    'openai-compatible': [],
-  },
-  recommendedPair: {
-    'minds-cloud': ['_reason_', '_code_'],
-    anthropic: ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-    openai: ['gpt-5.4', 'gpt-5.4-mini'],
-    gemini: ['gemini-2.5-pro', 'gemini-2.5-flash'],
-    'openai-compatible': ['', ''],
-  },
-};
-
-// Track the last-fetched settings so updateSettings can diff against it.
+// Snapshot of the last-fetched settings — used by diffSettingsForWrite to
+// skip no-op writes and by the masked-sentinel ("***") skip logic.
 let _lastFetchedSettings = {};
 
+// Serialize settings reads/writes so a concurrent fetchSettings +
+// updateSettings can't race on _lastFetchedSettings.
+let _settingsLock = Promise.resolve();
+
 export async function fetchSettings() {
-  try {
-    const rows = await req('/settings/');
-    // Transform SettingResponse[] into the flat camelCase blob the UI expects.
-    const result = { ..._STATIC_SETTINGS, providerStatus: {}, providerStatusDetails: {} };
-    for (const row of rows) {
-      const clientKey = _SETTINGS_KEY_MAP[row.key];
-      if (!clientKey) continue;
-      if (row.is_sensitive) {
-        // Sensitive fields: show "***" if set, empty string if not.
-        result[clientKey] = row.is_set ? '***' : '';
-      } else if (row.value != null) {
-        // Parse booleans
-        if (row.value === 'True' || row.value === 'true') result[clientKey] = true;
-        else if (row.value === 'False' || row.value === 'false') result[clientKey] = false;
-        // Parse JSON fields
-        else if (_JSON_FIELDS.has(clientKey)) {
-          try { result[clientKey] = JSON.parse(row.value); } catch { result[clientKey] = row.value; }
-        } else {
-          result[clientKey] = row.value;
-        }
-      }
-    }
-    // Derive defaultModel from planningModel for backward compat
-    result.defaultModel = result.planningModel || result.defaultModel;
-    // Ensure the providers list reflects all configured API keys.
-    // The stored providers_json may be incomplete (e.g. migrated from
-    // state.json with only some providers). Backfill any missing entries
-    // and mask API keys for display.
-    {
-      const providers = Array.isArray(result.providers) ? [...result.providers] : [];
-      const hasType = (t) => providers.some((p) => p.type === t);
-      if (result.anthropicApiKey === '***' && !hasType('anthropic')) {
-        providers.push({ type: 'anthropic', apiKey: '***', isDefault: result.planningProvider === 'anthropic' });
-      }
-      if (result.mindsApiKey === '***' && !hasType('minds-cloud')) {
-        providers.push({
-          type: 'minds-cloud', apiKey: '***',
-          mindsUrl: (result.mindsUrl || 'https://api.mindshub.ai/v1').replace(/\/v1$/, ''),
-          isDefault: result.planningProvider === 'minds_cloud' || result.planningProvider === 'minds-cloud',
-        });
-      }
-      if (result.openaiApiKey === '***' && !hasType('openai')) {
-        providers.push({ type: 'openai', apiKey: '***', isDefault: result.planningProvider === 'openai' });
-      }
-      // Stamp the masked apiKey on existing entries too
-      for (const p of providers) {
-        if (p.type === 'anthropic' && result.anthropicApiKey === '***') p.apiKey = '***';
-        if (p.type === 'openai' && result.openaiApiKey === '***') p.apiKey = '***';
-        if (p.type === 'minds-cloud' && result.mindsApiKey === '***') p.apiKey = '***';
-      }
-      if (providers.length > 0 && !providers.some((p) => p.isDefault)) {
-        providers[0].isDefault = true;
-      }
-      result.providers = providers;
-    }
-    // Derive configReady/configError from validate endpoint
+  const op = _settingsLock.then(async () => {
     try {
-      const v = await req('/settings/validate', { method: 'POST', body: JSON.stringify({}) });
-      result.configReady = v.configReady;
-      result.configError = v.configError;
-      result.providerLabel = v.provider;
-    } catch { /* leave defaults */ }
-    _lastFetchedSettings = result;
-    return result;
-  } catch {
-    return { ...MOCK_DATA.settings, configReady: false, configError: 'Anton backend is offline.' };
-  }
+      const rows = await req('/settings/');
+      const result = transformSettingsRows(rows);
+      try {
+        const v = await req('/settings/validate', { method: 'POST', body: JSON.stringify({}) });
+        result.configReady = v.configReady;
+        result.configError = v.configError;
+        result.providerLabel = v.provider;
+      } catch { /* leave defaults */ }
+      _lastFetchedSettings = result;
+      return result;
+    } catch {
+      return { ...MOCK_DATA.settings, configReady: false, configError: 'Backend is offline.' };
+    }
+  });
+  _settingsLock = op.catch(() => {});
+  return op;
 }
 
 export async function updateSettings(patch) {
-  // Identify which keys actually changed compared to last fetch.
-  const writes = {};
-  for (const [clientKey, value] of Object.entries(patch)) {
-    const serverKey = _CLIENT_TO_SERVER[clientKey];
-    if (!serverKey) continue;
-    // Skip masked sensitive values — "***" means "unchanged".
-    if (value === '***') continue;
-    // Skip values that haven't changed from last fetch.
-    const prev = _lastFetchedSettings[clientKey];
-    if (prev === value) continue;
-    if (typeof value === 'object' && JSON.stringify(prev) === JSON.stringify(value)) continue;
-    // JSON-encode object values.
-    writes[serverKey] = _JSON_FIELDS.has(clientKey) && typeof value === 'object'
-      ? JSON.stringify(value)
-      : String(value);
-  }
+  const op = _settingsLock.then(async () => {
+    const writes = diffSettingsForWrite(patch, _lastFetchedSettings);
 
-  // Write each changed key individually.
-  const updated = [];
-  for (const [key, value] of Object.entries(writes)) {
-    try {
-      await req(`/settings/${encodeURIComponent(key)}`, {
-        method: 'PUT',
-        body: JSON.stringify({ value }),
-      });
-      updated.push(key);
-    } catch (err) {
-      console.warn(`Failed to save setting ${key}:`, err);
+    const updated = [];
+    const failed = [];
+    for (const [key, value] of Object.entries(writes)) {
+      try {
+        await req(`/settings/${encodeURIComponent(key)}`, {
+          method: 'PUT',
+          body: JSON.stringify({ value }),
+        });
+        updated.push(key);
+      } catch (err) {
+        console.warn(`Failed to save setting ${key}:`, err);
+        failed.push({ key, message: err?.message || String(err) });
+      }
     }
-  }
 
-  // Return config status (mirrors the old response shape).
-  try {
-    const v = await req('/settings/validate', { method: 'POST', body: JSON.stringify({}) });
-    return { status: 'ok', updated, configReady: v.configReady, configError: v.configError };
-  } catch {
-    return { status: 'ok', updated };
-  }
+    if (failed.length > 0) {
+      const summary = failed.map((f) => `${f.key}: ${f.message}`).join('; ');
+      const err = new Error(`Failed to save ${failed.length === 1 ? 'setting' : 'settings'}: ${summary}`);
+      err.failed = failed;
+      err.updated = updated;
+      throw err;
+    }
+
+    // Re-fetch after successful writes so _lastFetchedSettings reflects
+    // the server's canonical state (including any server-side defaults).
+    try {
+      const rows = await req('/settings/');
+      _lastFetchedSettings = transformSettingsRows(rows);
+    } catch { /* keep prior snapshot */ }
+
+    try {
+      const v = await req('/settings/validate', { method: 'POST', body: JSON.stringify({}) });
+      return { status: 'ok', updated, configReady: v.configReady, configError: v.configError };
+    } catch {
+      return { status: 'ok', updated };
+    }
+  });
+  _settingsLock = op.catch(() => {});
+  return op;
 }
 
 export async function validateSettings() {
@@ -1078,10 +980,6 @@ export async function testProviders(providers) {
   }
 }
 
-// Fetch the real (unmasked) value of a stored API key — drives the eye
-// icon "reveal" in Settings. The GET /settings endpoint returns "***"
-// for stored keys; this endpoint returns the actual stored value so the
-// user can verify which key is configured.
 export async function revealSettingKey(name) {
   try {
     const res = await req(`/settings/reveal-key/${encodeURIComponent(name)}`);
@@ -1159,14 +1057,19 @@ export async function fetchDatasources() {
   return { connections: Array.isArray(data) ? data : [] };
 }
 
-// Legacy manual-form save — the real save flow goes through
-// streamDataVaultSubmission → POST /connectors/submissions.
-// These stubs match what the server used to return.
+// DEPRECATED: Legacy manual-form save — the real save flow now goes through
+// streamDataVaultSubmission → POST /connectors/submissions. The old
+// POST /datasources and POST /datasources/validate endpoints no longer
+// exist on the server. These stubs exist only because UtilitiesView's
+// retired ConnectView still imports them; they are unreachable in the
+// current routing. Remove when ConnectView is fully deleted.
 export async function saveDatasource(_payload) {
+  console.warn('saveDatasource() is deprecated — use streamDataVaultSubmission instead');
   return { ok: true };
 }
 
 export async function validateDatasource(_payload) {
+  console.warn('validateDatasource() is deprecated — use streamDataVaultSubmission instead');
   return { valid: true };
 }
 
@@ -1239,6 +1142,33 @@ export async function saveConnector(connectorId, payload) {
   });
 }
 
+// ─── Web (redirect-based) connector OAuth ──────────────────────────────────
+// The desktop app authenticates connectors through an Electron loopback
+// PKCE flow (host.oauthConnect). The web SPA can't open a loopback server,
+// so it drives the server-side redirect flow instead:
+//   1. startConnectorOAuth → server mints PKCE + state, returns authUrl.
+//   2. open authUrl (new tab); the user consents; the provider redirects
+//      to the server callback, which exchanges the code + saves the vault
+//      record itself.
+//   3. pollConnectorOAuth(state) until status is 'success' | 'error'.
+// The SPA never handles the code or tokens directly.
+
+export async function startConnectorOAuth(connectorId, { method, name, clientId, clientSecret } = {}) {
+  return req(`/connectors/${encodeURIComponent(connectorId)}/oauth/start`, {
+    method: 'POST',
+    body: JSON.stringify({
+      method: method || null,
+      name: name || '',
+      client_id: clientId || '',
+      client_secret: clientSecret || '',
+    }),
+  });
+}
+
+export async function pollConnectorOAuth(state) {
+  return req(`/connectors/oauth/status?state=${encodeURIComponent(state)}`);
+}
+
 export async function fetchPublishable() {
   return req('/publish');
 }
@@ -1258,7 +1188,7 @@ export async function fetchPublishable() {
 //
 // Field VALUES never round-trip through the response.
 export function streamDataVaultSubmission({
-  formId, conversationId, formSpec, values, skipped,
+  formId, conversationId, formSpec, values, skipped, name, method,
   onChunk, onProgress, onToolResult, onDone, onError, onEvent,
 } = {}) {
   const ctrl = new AbortController();
@@ -1270,6 +1200,8 @@ export function streamDataVaultSubmission({
         body: JSON.stringify({
           form_id: formId,
           conversation_id: conversationId || null,
+          name: name || formSpec?._existing_name || formSpec?.name || '',
+          method: method || null,
           values: values || {},
           skipped: skipped || [],
           form_spec: formSpec || null,
@@ -1347,7 +1279,7 @@ export function streamDataVaultSubmission({
 // Backwards-compatible non-streaming wrapper — kept so callers that
 // just need to stage values without streaming back can still do so.
 // (Currently unused by the form panel; might disappear in a cleanup.)
-export async function submitDataVaultForm({ formId, conversationId, values, skipped, formSpec }) {
+export async function submitDataVaultForm({ formId, conversationId, values, skipped, formSpec, name, method }) {
   // Fire the streaming endpoint but only consume the JSON body of
   // the response — useful for tests/probes that don't want SSE.
   const res = await fetch(`${BASE}/connectors/submissions`, {
@@ -1356,6 +1288,8 @@ export async function submitDataVaultForm({ formId, conversationId, values, skip
     body: JSON.stringify({
       form_id: formId,
       conversation_id: conversationId || null,
+      name: name || formSpec?._existing_name || formSpec?.name || '',
+      method: method || null,
       values: values || {},
       skipped: skipped || [],
       form_spec: formSpec || null,
