@@ -451,8 +451,8 @@ function setupIPC() {
     // is handled post-login by ensureActiveOrg() in minds-auth.ts.
     const result = await oauthConnect({
       clientId: 'anton-desktop',
-      authUrl: 'https://auth.dev.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/auth',
-      tokenUrl: 'https://auth.dev.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/token',
+      authUrl: 'https://auth.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/auth',
+      tokenUrl: 'https://auth.mindshub.ai/auth/realms/mindsdb/protocol/openid-connect/token',
       scopes: ['openid', 'profile', 'email', 'organization', 'offline_access'],
     });
     if (result.ok && result.access_token) {
