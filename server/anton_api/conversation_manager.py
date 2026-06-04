@@ -1060,19 +1060,21 @@ async def _build_chat_session(
         # `_code_`) and the current `latest:*` alias namespace — only
         # resolve at the openai-compatible router. If the user switched
         # off Minds Cloud after picking one of these, an old saved cowork
-        # preference can keep sending it on every request. Drop the
-        # override and stay with the env's `ANTON_PLANNING_MODEL` instead
-        # of forwarding a Minds-only name to api.anthropic.com (which 404s).
+        # preference can keep sending it on every request. Use a sensible
+        # default for the active provider instead of forwarding a Minds-only
+        # name to api.anthropic.com (which 404s).
         is_minds_only_model = (
             (model.startswith("_") and model.endswith("_"))
             or model.startswith("latest:")
         )
         if is_minds_only_model and settings.planning_provider != "openai-compatible":
+            default_model = "claude-opus-4-7" if settings.planning_provider == "anthropic" else settings.planning_model
             logging.getLogger(__name__).warning(
                 "Ignoring Minds-Cloud-only model %r — active planning_provider is %r. "
-                "Falling back to env ANTON_PLANNING_MODEL=%r.",
-                model, settings.planning_provider, settings.planning_model,
+                "Using default model %r.",
+                model, settings.planning_provider, default_model,
             )
+            settings.planning_model = default_model
         else:
             settings.planning_model = model
 
