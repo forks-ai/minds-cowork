@@ -1440,6 +1440,7 @@ function AppCore() {
           steps: streamState.steps,
           startedAt: streamState.startedAt,
           streamStatus: streamState.status,
+          harness: streamState.harness,
         }] };
       }));
     };
@@ -1465,6 +1466,7 @@ function AppCore() {
         const finalContent = streamState.bodyText || assistantContent;
         const finalSteps = streamState.steps;
         const finalStartedAt = streamState.startedAt;
+        const finalHarness = streamState.harness;
         let assistantTurnIndex = 0;
         setTasks((prev) => prev.map((t) => {
           if (t.id !== taskId) return t;
@@ -1476,6 +1478,7 @@ function AppCore() {
                 content: finalContent,
                 steps: finalSteps,
                 startedAt: finalStartedAt,
+                harness: finalHarness,
               }] }
             : { ...t, status: 'idle', messages: msgs };
         }));
@@ -2115,6 +2118,7 @@ function AppCore() {
           steps: streamState.steps,
           startedAt: streamState.startedAt,
           streamStatus: streamState.status,
+          harness: streamState.harness,
         }] };
       }));
     };
@@ -2213,6 +2217,7 @@ function AppCore() {
         const finalContent = streamState.bodyText || assistantContent;
         const finalSteps = streamState.steps;
         const finalStartedAt = streamState.startedAt;
+        const finalHarness = streamState.harness;
         let assistantTurnIndex = 0;
         setTasks((prev) => prev.map((t) => {
           if (t.id !== finalId && t.id !== resolvedId && t.id !== taskId) return t;
@@ -2228,6 +2233,7 @@ function AppCore() {
                 content: finalContent,
                 steps: finalSteps,
                 startedAt: finalStartedAt,
+                harness: finalHarness,
               }] }
             : { ...t, id: finalId, status: 'idle', messages: msgs };
         }));
@@ -2378,6 +2384,7 @@ function AppCore() {
           steps: streamState.steps,
           startedAt: streamState.startedAt,
           streamStatus: streamState.status,
+          harness: streamState.harness,
         }] };
       }));
     };
@@ -2426,6 +2433,7 @@ function AppCore() {
         const finalContent = streamState.bodyText || assistantContent;
         const finalSteps = streamState.steps;
         const finalStartedAt = streamState.startedAt;
+        const finalHarness = streamState.harness;
         let assistantTurnIndex = 0;
         setTasks((prev) => prev.map((t) => {
           if (t.id !== id && t.id !== resolvedId) return t;
@@ -2437,6 +2445,7 @@ function AppCore() {
                 content: finalContent,
                 steps: finalSteps,
                 startedAt: finalStartedAt,
+                harness: finalHarness,
               }] }
             : { ...t, status: 'idle', messages: msgs };
         }));
@@ -2533,6 +2542,7 @@ function AppCore() {
           steps: streamState.steps,
           startedAt: streamState.startedAt,
           streamStatus: streamState.status,
+          harness: streamState.harness,
         }] };
       }));
     };
@@ -2597,6 +2607,7 @@ function AppCore() {
         const finalContent = streamState.bodyText || assistantContent;
         const finalSteps = streamState.steps;
         const finalStartedAt = streamState.startedAt;
+        const finalHarness = streamState.harness;
         let assistantTurnIndex = 0;
         setTasks((prev) => prev.map((t) => {
           if (t.id !== id && t.id !== resolvedId) return t;
@@ -2608,6 +2619,7 @@ function AppCore() {
                 content: finalContent,
                 steps: finalSteps,
                 startedAt: finalStartedAt,
+                harness: finalHarness,
               }] }
             : { ...t, status: 'idle', messages: msgs };
         }));

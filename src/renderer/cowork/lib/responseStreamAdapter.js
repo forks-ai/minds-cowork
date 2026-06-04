@@ -41,6 +41,8 @@ export function initialStreamState() {
     /** Set when we've seen 'publish_or_preview' and expect the next
      *  progress content to be the artifact JSON payload. */
     awaitingArtifactPayload: false,
+    /** Harness/agent ID from `response.created` (e.g. 'anton', 'hermes'). */
+    harness: null,
     /** Surfaced for diagnostics if a failure event arrives. */
     error: null,
   };
@@ -202,6 +204,7 @@ export function reduceStream(state, event, now = Date.now) {
       ...state,
       responseId: event.response?.id ?? state.responseId,
       conversationId: event.conversation_id ?? state.conversationId,
+      harness: event.harness ?? state.harness,
       startedAt: state.startedAt ?? now(),
       status: 'thinking',
     };

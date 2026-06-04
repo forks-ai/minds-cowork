@@ -11,5 +11,11 @@ const HARNESS_LABELS = {
 /** Return the display name for the active harness. */
 export function getAgentLabel(settings) {
   const harness = settings?.harness || 'anton';
-  return HARNESS_LABELS[harness] || harness.charAt(0).toUpperCase() + harness.slice(1);
+  return harnessLabel(harness);
+}
+
+/** Return the display name for a harness ID string. */
+export function harnessLabel(id) {
+  if (!id) return null;
+  return HARNESS_LABELS[id] || id.charAt(0).toUpperCase() + id.slice(1);
 }

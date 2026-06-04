@@ -28,6 +28,7 @@ import { revealArtifact } from '../api';
 import { normalizeArtifactRecord } from '../lib/artifactPaths';
 import { host } from '../../platform/host';
 import { useBreakpoint } from '../hooks/useBreakpoint';
+import { harnessLabel } from '../lib/agentLabel';
 
 // Token shorthand mapped to our globals.css custom properties so the same
 // inline-styled JSX picks up the active theme.
@@ -1424,7 +1425,7 @@ export default function ChatView({
                   time={formatTime(m.createdAt)}
                   copyText={m.content}
                   onDelete={() => onDeleteTurn?.(turnIdxForThisBubble)}
-                  agentLabel={agentLabel}
+                  agentLabel={harnessLabel(m.harness) || agentLabel}
                 >
                   {m.steps?.length > 0 && (
                     <ThinkingBlock
@@ -1448,7 +1449,7 @@ export default function ChatView({
             })()}
 
             {streamingMsg ? (
-              <AnswerTurn state="thinking" time={formatTime(Date.now())} showActions={false} slotIdHeader="header:streaming" agentLabel={agentLabel}>
+              <AnswerTurn state="thinking" time={formatTime(Date.now())} showActions={false} slotIdHeader="header:streaming" agentLabel={harnessLabel(streamingMsg.harness) || agentLabel}>
                 {streamingMsg.steps?.length > 0 && (
                   <ThinkingBlock
                     steps={streamingMsg.steps}
