@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
@@ -36,12 +37,23 @@ export function getUvToolsDir(): string {
   return path.join(os.homedir(), '.local', 'share', 'uv', 'tools');
 }
 
+// uv names the tool venv after the installed package, not the CLI command.
+// The git package (github.com/mindsdb/anton) installs as the `anton-agent`
+// tool — so the interpreter lives under `…/tools/anton-agent/`, even though
+// the CLI entry-point is `anton`. Older installs used the bare `anton` name.
+// Probe both and return whichever actually exists; hardcoding a single name
+// is the historical cause of "Tool venv missing" on a healthy install.
+const ANTON_TOOL_NAMES = ['anton-agent', 'anton'];
+
 export function getAntonToolPython(): string {
-  return path.join(
-    getUvToolsDir(),
-    'anton',
-    process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python',
-  );
+  const toolsDir = getUvToolsDir();
+  const rel = process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python';
+  for (const name of ANTON_TOOL_NAMES) {
+    const candidate = path.join(toolsDir, name, rel);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  // Fall back to the canonical package name so error logs point somewhere sane.
+  return path.join(toolsDir, ANTON_TOOL_NAMES[0], rel);
 }
 
 export function getPythonUtf8Env(): NodeJS.ProcessEnv {

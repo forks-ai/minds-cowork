@@ -11,6 +11,7 @@ import {
   getAntonToolPython,
   getPythonUtf8Env,
   getServerDepsVerifyScript,
+  getUvToolsDir,
 } from './server-deps';
 
 interface InstallStep {
@@ -91,7 +92,7 @@ function runCommand(
   command: string,
   args: string[],
   win: BrowserWindow,
-  opts?: { shell?: boolean; shouldAbort?: () => boolean }
+  opts?: { shell?: boolean; shouldAbort?: () => boolean; env?: NodeJS.ProcessEnv }
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const env = {
@@ -101,6 +102,9 @@ function runCommand(
       // subprocess output deterministic so installer verification never
       // fails after successful imports because stdout cannot encode text.
       ...getPythonUtf8Env(),
+      // Caller-supplied overrides (e.g. UV_TOOL_DIR / UV_PYTHON_PREFERENCE
+      // for the `uv tool install` step) win over the inherited environment.
+      ...(opts?.env ?? {}),
     };
     const proc = spawn(command, args, {
       env,
@@ -441,8 +445,32 @@ export async function runInstaller(win: BrowserWindow, opts?: InstallerOptions):
     // has an anton tool venv that predates the server dependency set.
     installArgs.push('--force', '--reinstall', '--upgrade');
 
+    // Pin the two things that have repeatedly broken fresh installs:
+    //
+    //   UV_TOOL_DIR — the app must look for the tool venv in the exact dir
+    //   uv installs it to. Reconstructing uv's default location is brittle
+    //   (it has drifted across uv versions/platforms — see getUvToolsDir),
+    //   so instead we *tell* uv where to put it and read the same value back
+    //   during verify + server startup. getUvToolsDir() honors UV_TOOL_DIR
+    //   first, so the install target and the verify probe can never diverge.
+    //
+    //   UV_PYTHON_PREFERENCE=only-managed — without this uv builds the tool
+    //   venv on whatever base interpreter it discovers on PATH (Anaconda /
+    //   Miniconda, the Windows Store python stub, …). Those bases are not
+    //   self-contained, so the resulting venv can be missing/broken or fail
+    //   to launch outside their activation shell. A uv-managed standalone
+    //   CPython has no such dependency. The managed python is fetched from
+    //   the same GitHub host the installer already reaches for anton, so
+    //   this adds no new network requirement.
+    const uvEnv: NodeJS.ProcessEnv = {
+      UV_TOOL_DIR: getUvToolsDir(),
+      UV_PYTHON_PREFERENCE: 'only-managed',
+    };
+    sendLog(win, `Tool dir: ${uvEnv.UV_TOOL_DIR}\n`);
+    sendLog(win, 'Python: uv-managed (UV_PYTHON_PREFERENCE=only-managed)\n');
+
     const uvBin = fileExists(getUvBinary()) ? getUvBinary() : 'uv';
-    const installResult = await runCommand(uvBin, installArgs, win, { shouldAbort });
+    const installResult = await runCommand(uvBin, installArgs, win, { shouldAbort, env: uvEnv });
     if (abortIfRequested()) return false;
 
     if (installResult.code !== 0) {
@@ -481,6 +509,18 @@ export async function runInstaller(win: BrowserWindow, opts?: InstallerOptions):
     if (!fileExists(toolPython)) {
       setStep('verify', 'error');
       sendLog(win, `ERROR: tool python not found at ${toolPython}\n`);
+      // Self-diagnosing: dump what uv actually installed so a single log
+      // shows when the tool venv simply lives under a different name
+      // (e.g. `anton-agent`) rather than being genuinely absent.
+      const toolsDir = getUvToolsDir();
+      try {
+        const entries = fs.readdirSync(toolsDir);
+        sendLog(win, `uv tool dir (${toolsDir}) contains: ${
+          entries.length ? entries.join(', ') : '(empty)'
+        }\n`);
+      } catch {
+        sendLog(win, `uv tool dir (${toolsDir}) does not exist or is unreadable.\n`);
+      }
       sendInstallError(win, 'Tool venv missing');
       return false;
     }
@@ -498,7 +538,7 @@ export async function runInstaller(win: BrowserWindow, opts?: InstallerOptions):
         'This usually means the previous install step finished with a ' +
         'partial venv. Try re-running the installer; if it persists, ' +
         'manually run:\n' +
-        `  uv tool install --force git+https://github.com/mindsdb/anton.git ${
+        `  uv tool install --force --python-preference only-managed git+https://github.com/mindsdb/anton.git ${
           SERVER_PYTHON_DEPS.map((d) => `--with '${d.spec}'`).join(' ')
         }\n`
       );
