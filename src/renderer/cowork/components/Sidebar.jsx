@@ -3,7 +3,7 @@ import Ico from './Icons';
 import { Spinner } from './ui';
 import { TaskMenu } from './TaskMenu';
 import RecentsModal from './RecentsModal';
-import { host, getUIVersion } from '../../platform/host';
+import { host } from '../../platform/host';
 
 // Platform-aware modifier symbol for keyboard hints. Mac uses ⌘ glyph,
 // Windows/Linux use Ctrl+ literal.
@@ -354,11 +354,6 @@ export default function Sidebar({
 
   const [recentsModalOpen, setRecentsModalOpen] = useState(false);
 
-  // Fetch UI bundle version once on mount for the version label.
-  const [uiVersion, setUiVersion] = useState('');
-  useEffect(() => {
-    getUIVersion().then(setUiVersion).catch(() => {});
-  }, []);
 
   const pinnedTasks = (pins || [])
     .filter((pin) => pin.item_type === 'conversation')
@@ -493,7 +488,7 @@ export default function Sidebar({
               userSelect: 'none',
             }}
           >·</span>
-          <div className="anton-sidebar__wordmark">Minds Cowork</div>
+          <div className="anton-sidebar__wordmark">Minds</div>
         </div>
       </div>
 
@@ -812,30 +807,7 @@ export default function Sidebar({
         </div>
         )}
 
-        {/* Version label — visible in both Electron and web shells so
-            users can tell at a glance which build they're running and
-            whether the OTA UI bundle is in sync. */}
-        <div
-          style={{
-            padding: '4px 14px 8px',
-            fontSize: 10,
-            fontFamily: 'var(--font-mono)',
-            color: 'var(--text-muted, var(--text-faded))',
-            opacity: 0.6,
-            flexShrink: 0,
-            userSelect: 'text',
-          }}
-          title={
-            uiVersion && uiVersion !== 'web' && uiVersion !== 'bundled'
-              ? `App ${typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '?'} · UI ${uiVersion}`
-              : `v${typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '?'}`
-          }
-        >
-          v{typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '?'}
-          {uiVersion && uiVersion !== 'web' && uiVersion !== 'bundled' && uiVersion !== (typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '') && (
-            <span style={{ opacity: 0.7 }}>{' · '}ui {uiVersion}</span>
-          )}
-        </div>
+        {/* Version is shown on the Settings page — no need to repeat here. */}
       </div>
 
       <RecentsModal
