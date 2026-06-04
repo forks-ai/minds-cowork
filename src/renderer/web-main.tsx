@@ -6,6 +6,11 @@
 // window.antontron in Electron. Setup auto-completes on web (the
 // FastAPI host running this code IS the install).
 //
+// Cloud-hosted instances (behind the Cloudflare Worker auth gate) skip
+// the Keycloak wrapper entirely — the user already authenticated via
+// the MindsHub dashboard, and the Worker's session cookie gates access.
+// Keycloak is only needed for standalone web dev (localhost).
+//
 // Same as main.tsx:
 //   - First-paint theme bootstrap (avoids palette flash).
 //   - Tailwind + cowork tokens loaded in the same order.
@@ -20,6 +25,15 @@ import App from './App';
 import { keycloak, scheduleWebTokenRefresh } from './lib/keycloak';
 import { host } from './platform/host';
 
+// Cloud-hosted instances are accessed via the Cloudflare Worker, which
+// already authenticates users via a session cookie minted from their
+// MindsHub Keycloak JWT. The SPA doesn't need its own Keycloak login.
+// Detect cloud hosting by checking if the hostname is NOT localhost/loopback.
+const isCloudHosted = (() => {
+  const h = window.location.hostname;
+  return h !== 'localhost' && h !== '127.0.0.1' && h !== '::1';
+})();
+
 (() => {
   let theme: 'light' | 'dark' = 'dark';
   try {
@@ -30,7 +44,8 @@ import { host } from './platform/host';
   document.body.classList.add(theme === 'light' ? 'gf-theme-light' : 'gf-theme-dark');
 })();
 
-const initOptions = { onLoad: 'login-required' as const, pkceMethod: 'S256', checkLoginIframe: false };
+const cleanRedirectUri = `${window.location.protocol}//${window.location.host}${window.location.pathname}`;
+const initOptions = { onLoad: 'login-required' as const, pkceMethod: 'S256', checkLoginIframe: false, redirectUri: cleanRedirectUri };
 
 const MINDS_ENV = (token: string) => [
   `ANTON_OPENAI_API_KEY=${token}`,
@@ -59,10 +74,22 @@ function handleKeycloakEvent(event: string): void {
   }
 }
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <ReactKeycloakProvider authClient={keycloak} initOptions={initOptions} onEvent={handleKeycloakEvent}>
+const root = document.getElementById('root')!;
+
+if (isCloudHosted) {
+  // Cloud: Worker session cookie is the auth gate. Render directly.
+  createRoot(root).render(
+    <StrictMode>
       <App />
-    </ReactKeycloakProvider>
-  </StrictMode>
-);
+    </StrictMode>
+  );
+} else {
+  // Local dev: Keycloak handles auth + token refresh.
+  createRoot(root).render(
+    <StrictMode>
+      <ReactKeycloakProvider authClient={keycloak} initOptions={initOptions} onEvent={handleKeycloakEvent}>
+        <App />
+      </ReactKeycloakProvider>
+    </StrictMode>
+  );
+}
