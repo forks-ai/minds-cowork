@@ -40,13 +40,6 @@ if SPA_DIR.exists():
     }
     _spa_shell: Path = SPA_DIR / "index-web.html"
 
-    @app.get("/health")
-    async def health_compat():
-        """Compat endpoint — proxies to /api/v1/health for callers that probe /health."""
-        from cowork.api.v1.endpoints.health import health
-
-        return health()
-
     @app.get("/")
     async def root():
         return FileResponse(str(_spa_shell))

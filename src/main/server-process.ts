@@ -68,7 +68,10 @@ function killTree(proc: ChildProcess, signal: NodeJS.Signals): void {
 // servers that we adopted but don't have a ChildProcess handle for.
 // Best-effort — failures are silently ignored.
 async function killProcessOnPort(port: number): Promise<void> {
-  if (process.platform === 'win32') return; // lsof not available
+  if (process.platform === 'win32') {
+    console.warn(`[server] cannot reap orphaned process on port ${port}: lsof not available on Windows`);
+    return;
+  }
   return new Promise<void>((resolve) => {
     execFile('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { timeout: 3000 }, (err, stdout) => {
       if (err || !stdout.trim()) { resolve(); return; }
@@ -155,6 +158,7 @@ async function probeHealth(timeoutMs: number): Promise<boolean> {
     if (ok) return true;
     await new Promise((r) => setTimeout(r, 250));
   }
+  console.warn(`[server] health check failed after ${timeoutMs}ms on port ${serverPort}`);
   return false;
 }
 
