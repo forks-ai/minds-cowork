@@ -1,8 +1,10 @@
-// Spawns the bundled Python FastAPI server (server/main.py) and waits for
-// /health to come up. Uses the python interpreter that the installer puts
-// in uv's tool dir (e.g. ~/.local/share/uv/tools/anton-agent/bin/python —
-// the tool is named after the `anton-agent` package, not the `anton` CLI).
-// getAntonToolPython() resolves the real location; see server-deps.ts.
+/*
+ * Spawns the bundled Python FastAPI server (server/main.py) and waits for
+ * /health to come up. Uses the python interpreter that the installer puts
+ * in uv's tool dir (e.g. ~/.local/share/uv/tools/anton-agent/bin/python —
+ * the tool is named after the `anton-agent` package, not the `anton` CLI).
+ * getAntonToolPython() resolves the real location; see server-deps.ts.
+ */
 
 import { spawn, ChildProcess } from 'child_process';
 import * as fs from 'fs';
