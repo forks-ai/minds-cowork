@@ -97,11 +97,11 @@ function fetchLatestVersion(): Promise<string | null> {
  *  or by asking uv. Falls back to reading the package metadata. */
 function getInstalledVersion(uv: string): Promise<string | null> {
   return new Promise((resolve) => {
-    // `uv tool list` outputs lines like "cowork-server v0.1.2"
+    // `uv tool list` outputs lines like "cowork-server v0.1.4"
     execFile(uv, ['tool', 'list'], { env: { ...process.env, PATH: getEnvPath() }, timeout: 10000 }, (err, stdout) => {
       if (err) { resolve(null); return; }
       for (const line of stdout.split('\n')) {
-        // Format: "cowork-server v0.1.2" or "cowork-server v0.1.2 (cowork-server)"
+        // Format: "cowork-server v0.1.4" or "cowork-server v0.1.4 (cowork-server)"
         const match = line.match(/^cowork-server\s+v?([\d.]+)/);
         if (match) { resolve(match[1]); return; }
       }

@@ -20,7 +20,7 @@ interface InstallerOptions {
 // cowork release that requires backend changes. The installer will
 // install at least this version (a minimum floor), picking up any
 // newer compatible releases automatically.
-const COWORK_SERVER_MIN_VERSION = '0.1.3';
+const COWORK_SERVER_MIN_VERSION = '0.1.4';
 
 // Package source for cowork-server. Override with COWORK_SERVER_PACKAGE
 // env var (e.g. a local path or alternative git URL during development).
