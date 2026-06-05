@@ -127,12 +127,14 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-/** Run `uv tool install --upgrade cowork-server`. */
+/** Run `uv tool install --upgrade --reinstall cowork-server`.
+ *  The --reinstall flag ensures the tool venv is rebuilt from scratch,
+ *  picking up newly-added dependencies (e.g. alembic added in 0.1.4). */
 function runUpgrade(uv: string): Promise<{ ok: boolean; stderr: string }> {
   return new Promise((resolve) => {
     execFile(
       uv,
-      ['tool', 'install', '--upgrade', PACKAGE_NAME],
+      ['tool', 'install', '--upgrade', '--reinstall', PACKAGE_NAME],
       { env: { ...process.env, PATH: getEnvPath() }, timeout: 120000 },
       (err, _stdout, stderr) => {
         resolve({ ok: !err, stderr: stderr || err?.message || '' });
