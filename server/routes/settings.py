@@ -35,6 +35,7 @@ CANONICAL_KEY_FALLBACKS = {
 }
 
 PROVIDER_LABELS = {
+    "minds-cloud": "MindsHub",
     "anthropic": "Anthropic",
     "openai": "OpenAI",
     "openai-compatible": "OpenAI-compatible",
@@ -288,6 +289,8 @@ def get_config_status() -> dict[str, Any]:
         missing.append("ANTON_ANTHROPIC_API_KEY")
     elif provider == "openai" and not openai_key:
         missing.append("ANTON_OPENAI_API_KEY")
+    elif provider == "minds-cloud" and not minds_key:
+        missing.append("ANTON_MINDS_API_KEY")
     elif provider == "openai-compatible":
         if not (openai_key or minds_key):
             missing.append("ANTON_OPENAI_API_KEY or ANTON_MINDS_API_KEY")
@@ -1428,12 +1431,14 @@ async def check_configured():
     env = _read_dotenv(GLOBAL_ENV_PATH)
     if env.get("ANTON_TERMS_CONSENT") != "true":
         return {"configured": False, "provider": ""}
+    if env.get("ANTON_MINDS_API_KEY") or os.environ.get("ANTON_MINDS_API_KEY"):
+        return {"configured": True, "provider": "minds-cloud"}
     if env.get("ANTON_ANTHROPIC_API_KEY") or os.environ.get("ANTON_ANTHROPIC_API_KEY"):
         return {"configured": True, "provider": "anthropic"}
     if (env.get("ANTON_OPENAI_API_KEY") or os.environ.get("ANTON_OPENAI_API_KEY")) and (
         env.get("ANTON_OPENAI_BASE_URL") or os.environ.get("ANTON_OPENAI_BASE_URL")
     ):
-        return {"configured": True, "provider": "minds"}
+        return {"configured": True, "provider": "openai-compatible"}
     return {"configured": False, "provider": ""}
 
 

@@ -216,7 +216,7 @@ export default function ContextFileModal({
   const headerTitle = title ?? (isAnton ? 'anton.md' : filePath);
   const headerSubtitle = subtitle ?? (isAnton ? 'Project instructions' : null);
   const editorPlaceholder = placeholder ?? (isAnton
-    ? "Tell Anton how to work in this project — codebase conventions, output preferences, things to avoid…"
+    ? "Tell the agent how to work in this project — codebase conventions, output preferences, things to avoid…"
     : 'File contents');
   const emptyText = emptyMessage ?? (isAnton
     ? '(no instructions yet — click Edit to add some)'

@@ -250,6 +250,7 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
     // `wireMethodId` falls through to `authMethod` for ordinary
     // (non-synthetic) methods so create-flow behaviour is unchanged.
     const wireMethodId = activeMethodSpec?._underlying_method || authMethod;
+    const connectionName = spec._existing_name || spec.name || '';
     if (activeMethodSpec?.submit_action === 'oauth_launch' && kind === 'primary') {
       const oauthMeta = activeMethodSpec.oauth || {};
       const clientId = oauthMeta.client_id || (values && values.client_id) || '';
@@ -408,7 +409,7 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
               // (`(engine, name)` is the row key). Without this the
               // server falls back to `uuid.uuid4().hex[:8]` and we
               // end up with a sibling entry instead of an update.
-              name: spec._existing_name || '',
+              name: connectionName,
               values: oauthValues,
             });
             // Flip the form into its success branch so the user gets
@@ -418,7 +419,7 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
               form_id: spec.form_id,
               _is_success: true,
               title: `${saved.label || connectorId} connected`,
-              subtitle: 'Saved to Anton\'s data vault. Anton can use this connection in tasks.',
+              subtitle: 'Saved to the data vault. The agent can use this connection in tasks.',
             });
             // Surface a one-line confirmation in the chat too.
             onContinue?.({
@@ -441,6 +442,8 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
               : spec,
             values: oauthValues,
             skipped: skipped || [],
+            name: connectionName,
+            method: wireMethodId || null,
           });
         }
       } catch (e) {
@@ -474,6 +477,8 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
             : spec,
           values: values || {},
           skipped: skipped || [],
+          name: connectionName,
+          method: wireMethodId || null,
         });
         // Don't await — the stream pumps events into ChatView state
         // directly. We can drop the local busy flag; the Composer's
@@ -488,6 +493,8 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
           formSpec: spec,
           values: values || {},
           skipped: skipped || [],
+          name: connectionName,
+          method: wireMethodId || null,
         });
         onContinue?.(buildContinuation({
           spec, action: id, kind,
@@ -742,7 +749,7 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
                       form_id: spec.form_id,
                       _is_success: true,
                       title: successTitle,
-                      subtitle: "Saved to Anton's data vault. Anton can now use this connection in tasks.",
+                      subtitle: "Saved to the data vault. The agent can now use this connection in tasks.",
                     });
                   }
                 } catch { /* keep polling */ }

@@ -5,8 +5,9 @@ import * as os from 'os';
 import * as https from 'https';
 import * as http from 'http';
 import { IPC } from '../shared/ipc-channels';
-import { checkAntonInstalled, checkInstallStatus, runInstaller } from './installer';
+import { checkInstallStatus, runInstaller } from './installer';
 import { startServer, stopServer, isServerRunning, isServerStarting, getServerPort, getServerDiagnostics } from './server-process';
+import { maybeUpdateServer, setUpdateNotifier } from './server-updater';
 import { oauthConnect, cancelCurrentOAuth } from './oauth-service';
 import { saveTokens, getAccessToken, getRefreshToken, clearTokens } from './token-store';
 import { silentRefresh, refreshTokensOnly, writeMindsKeyToEnvAndRestart, provisionAntonApiKey, scheduleRefresh, endKeycloakSession } from './minds-auth';
@@ -85,8 +86,10 @@ function getUpdateMode(): 'auto' | 'manual' {
 function checkConfigured(): { configured: boolean; provider: string } {
   const vars = readEnvFile();
   if (vars.ANTON_TERMS_CONSENT !== 'true') return { configured: false, provider: '' };
+  if (vars.ANTON_MINDS_API_KEY) return { configured: true, provider: 'minds' };
   if (vars.ANTON_ANTHROPIC_API_KEY) return { configured: true, provider: 'anthropic' };
-  if (vars.ANTON_OPENAI_API_KEY && vars.ANTON_OPENAI_BASE_URL) return { configured: true, provider: 'minds' };
+  if (vars.ANTON_OPENAI_API_KEY && vars.ANTON_OPENAI_BASE_URL) return { configured: true, provider: 'openai' };
+  if (vars.ANTON_OPENAI_API_KEY) return { configured: true, provider: 'openai' };
   return { configured: false, provider: '' };
 }
 
@@ -363,10 +366,6 @@ function createWindow() {
 // IPC handlers
 function setupIPC() {
   ipcMain.handle(IPC.INSTALL_CHECK, async () => {
-    // Return both the CLI presence AND the server-deps readiness so
-    // the renderer can route to setup when either is missing — covers
-    // the case where the user already has the anton CLI installed
-    // independently but doesn't have fastapi/uvicorn/etc. yet.
     return checkInstallStatus();
   });
 
@@ -489,7 +488,7 @@ function setupIPC() {
       return { ok: false, reason: result.error || 'Could not provision a MindsHub API key.' };
     }
     await writeMindsKeyToEnvAndRestart(result.key);
-    return { ok: true };
+    return { ok: true, apiKey: result.key };
   });
 
   // Returns the in-memory access token if one is cached (e.g. boot-
@@ -589,6 +588,18 @@ function setupIPC() {
 
   ipcMain.handle(IPC.SETTINGS_READ, async () => {
     return readEnvFile();
+  });
+
+  ipcMain.handle(IPC.SERVER_RESTART, async () => {
+    console.log('[server] restart requested (post-onboarding)');
+    await stopServer();
+    const result = await startServer({});
+    if (result.ok) {
+      console.log(`[server] restarted on http://127.0.0.1:${result.port}`);
+    } else {
+      console.error(`[server] restart failed: ${result.reason}`);
+    }
+    return result;
   });
 
   ipcMain.handle(IPC.SETTINGS_SAVE, async (_event, content: string) => {
@@ -775,34 +786,12 @@ app.whenReady().then(() => {
   setupIPC();
   createWindow();
 
-  // If anton is already installed AND the server-runtime Python deps
-  // are importable, start the bundled python server in the
-  // background. Skips silently if either is missing — the renderer's
-  // boot flow will route to the setup screen, which handles installing
-  // (or re-installing with extras) and then starts the server itself.
-  // Without the deps check, a returning user with a stand-alone
-  // `anton` install would see the server fail to start with a Python
-  // ImportError they can't act on.
-  // Boot-time server start. Three branches, all loud so the user
-  // can see why they're offline if it goes wrong:
-  //   1. Anton not installed at all → setup screen handles it.
-  //   2. Server deps missing from the tool venv → log + skip; the
-  //      install step re-fills the deps, the next launch picks up.
-  //   3. Otherwise → call `startServer()`, which itself begins with a
-  //      `/health` probe so it adopts an already-listening orphan
-  //      from a prior session before trying to spawn a fresh python.
-  //
-  // Auto-update is handled inside `server/main.py` via
-  // `_maybe_self_update_and_reexec` — same `anton.updater.check_and_update`
-  // the CLI uses. The python child execs itself in-place when a new
-  // release lands, transparent to Node.
-  checkInstallStatus().then(async ({ antonInstalled, serverDepsReady }) => {
+  // Boot-time server start. If cowork-server is installed, start it
+  // in the background. If not, skip — the renderer's boot flow will
+  // route to the setup screen which handles installation.
+  checkInstallStatus().then(async ({ antonInstalled }) => {
     if (!antonInstalled) {
-      console.log('[server] skipped: Anton CLI not installed; setup screen will handle.');
-      return;
-    }
-    if (!serverDepsReady) {
-      console.warn('[server] skipped: server deps missing from tool venv. Run installer to repair.');
+      console.log('[server] skipped: cowork-server not installed; setup screen will handle.');
       return;
     }
     // If MindsHub SSO tokens are stored, silently refresh before the Python
@@ -828,6 +817,22 @@ app.whenReady().then(() => {
       console.error(`[server] start failed: ${result.reason}`);
     } else {
       console.log(`[server] running on http://127.0.0.1:${result.port}`);
+      // Background update check — runs after the server is already
+      // serving so users aren't blocked. If a newer version is found
+      // on PyPI, stops the server, upgrades, and restarts. Rolls back
+      // automatically if the new version fails the health probe.
+      setUpdateNotifier((payload) => {
+        mainWindow?.webContents.send(IPC.SERVER_UPDATE_STATUS, payload);
+      });
+      maybeUpdateServer().then((updateResult) => {
+        if (updateResult.updated) {
+          console.log(`[server-updater] updated ${updateResult.previousVersion} → ${updateResult.newVersion}`);
+        } else if (updateResult.error) {
+          console.error(`[server-updater] ${updateResult.error}`);
+        }
+      }).catch((err) => {
+        console.error('[server-updater] check failed:', err);
+      });
     }
   }).catch((err) => {
     console.error('[server] check-and-start failed:', err);

@@ -1,15 +1,15 @@
 import { useState, useEffect, useRef, useId } from 'react';
 import Ico from '../components/Icons';
 import { validateSettings, revealSettingKey, testProviders } from '../api';
+import { providerTypeToKeyField, providerValueToType } from '../lib/settingsTransform';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { host } from '../../platform/host';
 import { MINDS_API_KEY_URL } from '../../pages/onboarding/constants';
 import { getUIVersion, isElectron } from '../../platform/host';
 
-// Provider preset → underlying canonical fields. The backend only knows
-// three providers (anthropic / openai / openai-compatible). Gemini and
-// Minds Cloud are presets that translate to openai-compatible + a known
-// base URL on save, and are recognized back from those values on load.
+// Provider preset → underlying canonical fields. The Settings UI uses
+// hyphenated provider types; the API layer translates those to the
+// server's enum values when saving.
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
 const MINDS_API_PATH_SUFFIX = '/v1';
 
@@ -114,7 +114,10 @@ function inferProviderPreset(s) {
   const baseUrl = (s.openaiBaseUrl || '').trim();
   if (provider === 'anthropic') return 'anthropic';
   if (provider === 'openai') return 'openai';
-  if (provider === 'openai-compatible') {
+  // The backend DB stores "minds_cloud" for MindsHub; treat it the same
+  // as detecting openai-compatible + a mindshub base URL.
+  if (provider === 'minds_cloud' || provider === 'minds-cloud') return 'minds-cloud';
+  if (provider === 'openai-compatible' || provider === 'openai_compatible') {
     if (baseUrl.startsWith('https://generativelanguage.googleapis.com/')) return 'gemini';
     if (baseUrl.includes('mdb.ai') || baseUrl.includes('mindshub.ai') || baseUrl.endsWith(MINDS_API_PATH_SUFFIX) && (s.mindsApiKey || s.mindsUrl)) {
       return 'minds-cloud';
@@ -156,14 +159,15 @@ function applyProviderPreset(preset, settings, setSetting) {
       setSetting('openaiBaseUrl', '');
     }
   } else if (preset === 'minds-cloud') {
-    setSetting('planningProvider', 'openai-compatible');
-    setSetting('codingProvider', 'openai-compatible');
+    setSetting('planningProvider', 'minds-cloud');
+    setSetting('codingProvider', 'minds-cloud');
     const mindsUrl = (settings.mindsUrl || 'https://api.mindshub.ai').replace(/\/+$/, '');
     setSetting('mindsUrl', mindsUrl);
     setSetting('openaiBaseUrl', `${mindsUrl}${MINDS_API_PATH_SUFFIX}`);
-    if (settings.mindsApiKey && !settings.openaiApiKey) {
-      setSetting('openaiApiKey', settings.mindsApiKey);
-    }
+    // The server's build_llm_client reads minds_api_key (not
+    // openai_api_key) for the minds_cloud provider, so we no longer
+    // copy the Minds key into the OpenAI slot — that would clobber
+    // any real OpenAI key the user configures separately.
   }
 
   // 2. Reset planning + coding models to the new provider's defaults so
@@ -681,7 +685,7 @@ function CredentialRow({ title, subtitle, status, hasValue, children }) {
   );
 }
 
-export default function SettingsView({ settings, setSetting, onSave, theme, onThemeChange }) {
+export default function SettingsView({ settings, setSetting, onSave, theme, onThemeChange, agentLabel }) {
   const [saved, setSaved] = useState(false);
   const [validation, setValidation] = useState(null);
   const [testing, setTesting] = useState(false);
@@ -736,6 +740,40 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
   const availableTypesForAdd = PROVIDER_TYPE_ORDER.filter(
     (t) => !providers.some((p) => p.type === t),
   );
+
+  const roleOverride = (role) => {
+    if (modelMode !== 'custom') return null;
+    const override = overrides[role];
+    if (!override || typeof override !== 'object') return null;
+    return { ...override, providerType: providerValueToType(override.providerType) };
+  };
+  const canonicalProviderForRole = (role) => providerValueToType(
+    role === 'planning' ? settings.planningProvider : settings.codingProvider,
+  ) || 'minds-cloud';
+  const canonicalModelForRole = (role) => {
+    if (role === 'planning') return settings.planningModel ?? settings.defaultModel ?? '';
+    return settings.codingModel ?? '';
+  };
+  const roleProviderType = (role) => roleOverride(role)?.providerType || canonicalProviderForRole(role);
+  const roleModelValue = (role, fallback = '') => {
+    const override = roleOverride(role);
+    if (override && Object.prototype.hasOwnProperty.call(override, 'model')) {
+      return override.model || '';
+    }
+    return canonicalModelForRole(role) || fallback || '';
+  };
+  const setRoleDriver = (role, providerType, model) => {
+    const normalizedType = providerValueToType(providerType) || 'minds-cloud';
+    const nextModel = model || '';
+    if (role === 'planning') {
+      setSetting('planningProvider', normalizedType);
+      setSetting('planningModel', nextModel);
+      setSetting('defaultModel', nextModel);
+    } else {
+      setSetting('codingProvider', normalizedType);
+      setSetting('codingModel', nextModel);
+    }
+  };
 
   // A provider is usable once it carries the credential it needs: an
   // API key for the hosted providers, or a base URL for an
@@ -816,6 +854,17 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
   const updateProviderField = (type, key, value) => {
     setLlmDirty(true);
     updateProviders(providers.map((p) => (p.type === type ? { ...p, [key]: value } : p)));
+    // Sync provider card API keys to the individual settings so both
+    // stay in sync. Without this, the providers JSON blob gets the new
+    // key but the individual openai_api_key / anthropic_api_key /
+    // minds_api_key setting stays stale.
+    if (key === 'apiKey' && value !== '***') {
+      const settingKey = providerTypeToKeyField(type);
+      if (settingKey) setSetting(settingKey, value);
+    }
+    if (key === 'baseUrl' && (type === 'openai-compatible' || type === 'gemini')) {
+      setSetting('openaiBaseUrl', value);
+    }
   };
   const addProviderOfType = (type) => {
     if (providers.some((p) => p.type === type)) return;
@@ -830,19 +879,18 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
     setLlmDirty(true);
     const next = providers.filter((p) => p.type !== type);
 
-    // Role overrides referencing the removed provider get re-pointed
-    // at MindsHub (the implicit fallback) with its recommended pair
-    // for the role.
+    // Role settings referencing the removed provider get re-pointed
+    // at MindsHub with its recommended pair for the role.
     const adjustedOverrides = {};
     for (const role of ['planning', 'coding']) {
-      const o = overrides[role];
-      if (!o) continue;
-      if (o.providerType === type) {
+      const o = roleOverride(role);
+      if (roleProviderType(role) === type) {
         const pair = recommendedPair['minds-cloud'] || ['', ''];
         const fallback = pair[role === 'planning' ? 0 : 1] || (recommendedModels['minds-cloud']?.[0] || '');
         adjustedOverrides[role] = { providerType: 'minds-cloud', model: fallback };
+        setRoleDriver(role, 'minds-cloud', fallback);
       } else {
-        adjustedOverrides[role] = o;
+        if (o) adjustedOverrides[role] = o;
       }
     }
     setSetting('modelOverrides', adjustedOverrides);
@@ -850,8 +898,8 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
   };
 
   // Tests only the providers currently driving the planning + coding
-  // roles. Each role contributes its driver (its override, or MindsHub
-  // when there's no override), so if planning picks Anthropic and
+  // roles. Each role contributes its driver (its custom override, or
+  // the canonical role setting), so if planning picks Anthropic and
   // coding picks OpenAI, both get pinged. Inactive registered
   // providers keep their previous status (no point hammering OpenAI
   // when the user isn't using it). Sends the active providers' live
@@ -988,7 +1036,7 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
           <div style={{ maxWidth: 820 }}>
             <h1 className="page-title" style={{ marginTop: 0, marginBottom: 6 }}>Settings</h1>
             <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 22 }}>
-              Anton configuration and local desktop preferences.
+              {`${agentLabel || 'Anton'} configuration and local desktop preferences.`}
             </div>
 
             {/* Status banner — only shown after Save or Test. While
@@ -1018,10 +1066,10 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
               const title = testing
                 ? 'Testing configuration…'
                 : anyActiveFail
-                  ? 'Anton needs a valid LLM provider and API key to work'
+                  ? `${agentLabel || 'Anton'} needs a valid LLM provider and API key to work`
                   : tested
-                    ? (effectiveReady ? 'Anton setup correctly' : 'Test failed')
-                    : effectiveReady ? 'Anton setup correctly' : 'Anton needs configuration';
+                    ? (effectiveReady ? `${agentLabel || 'Anton'} setup correctly` : 'Test failed')
+                    : effectiveReady ? `${agentLabel || 'Anton'} setup correctly` : `${agentLabel || 'Anton'} needs configuration`;
               const subtitle = testing
                 ? 'Talking to the active provider — hold on.'
                 : anyActiveFail
@@ -1359,6 +1407,20 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
               </div>
             </CollapsibleGroup>
 
+            <CollapsibleGroup title="Agent">
+              <Section title="Harness" subtitle={`Which AI agent powers your tasks. ${agentLabel || 'Anton'} is the default; Hermes is an alternative agent with its own tool and memory system.`}>
+                <Segmented
+                  value={settings.harness || 'anton'}
+                  onChange={(v) => { setSetting('harness', v); setLlmDirty(true); }}
+                  groupLabel="Agent harness"
+                  options={[
+                    { value: 'anton',  label: 'Anton',  ariaLabel: 'Use Anton agent',  title: 'Anton — the default AI agent.' },
+                    { value: 'hermes', label: 'Hermes', ariaLabel: 'Use Hermes agent', title: 'Hermes — alternative agent with independent tools and memory.' },
+                  ]}
+                />
+              </Section>
+            </CollapsibleGroup>
+
             <CollapsibleGroup title="Agent Models">
               {(() => {
                 // The default-mode provider is the implicit fallback for
@@ -1376,17 +1438,21 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
                 // for the role. Empty overrides fall back to the default
                 // provider's recommended pair.
                 const RoleRow = ({ role, label }) => {
-                  const cur = overrides[role] || {};
-                  const curType = cur.providerType || (defaultProvider?.type || '');
+                  const cur = roleOverride(role) || {};
+                  const curType = roleProviderType(role) || (defaultProvider?.type || '');
                   const fallbackPair = recommendedPair[curType] || ['', ''];
                   const fallbackModel = fallbackPair[role === 'planning' ? 0 : 1] || '';
-                  const curModel = cur.model || fallbackModel;
+                  const curModel = roleModelValue(role, fallbackModel);
                   const provider = providers.find((p) => p.type === curType);
                   const modelList = recommendedModels[curType] || [];
 
                   const writeOverride = (next) => {
+                    const providerType = providerValueToType(next.providerType || curType) || 'minds-cloud';
+                    const model = next.model || '';
+                    const normalized = { providerType, model };
                     setLlmDirty(true);
-                    setSetting('modelOverrides', { ...overrides, [role]: next });
+                    setRoleDriver(role, providerType, model);
+                    setSetting('modelOverrides', { ...overrides, [role]: normalized });
                     setSetting('modelMode', 'custom');
                   };
 
@@ -1683,7 +1749,7 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
                     </CredentialRow>
                     <CredentialRow
                       title="Minds URL"
-                      subtitle="Base URL for Minds-backed Anton features."
+                      subtitle="Base URL for Minds-backed Minds Cowork features."
                       status={relevance.mindsUrl}
                       hasValue={has('mindsUrl')}
                     >
@@ -1730,14 +1796,14 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
             })()}
 
             <CollapsibleGroup title="Memory" defaultOpen={false}>
-              <Section title="Memory mode" subtitle="How Anton updates its long-term memory.">
+              <Section title="Memory mode" subtitle={`How ${agentLabel || 'Anton'} updates its long-term memory.`}>
                 <Segmented
                   value={settings.memoryMode ?? 'autopilot'}
                   onChange={(v) => setSetting('memoryMode', v)}
                   groupLabel="Memory mode"
                   options={[
-                    { value: 'autopilot', label: 'Autopilot', title: 'Anton updates long-term memory automatically.' },
-                    { value: 'copilot',   label: 'Copilot',   title: 'Anton suggests memory updates for you to confirm.' },
+                    { value: 'autopilot', label: 'Autopilot', title: `${agentLabel || 'Anton'} updates long-term memory automatically.` },
+                    { value: 'copilot',   label: 'Copilot',   title: `${agentLabel || 'Anton'} suggests memory updates for you to confirm.` },
                     { value: 'off',       label: 'Off',       title: 'Disable long-term memory updates.' },
                   ]}
                 />
@@ -1746,7 +1812,7 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
                 <Toggle
                   value={settings.episodicMemory ?? true}
                   onChange={(v) => setSetting('episodicMemory', v)}
-                  title="Save conversation history so Anton can recall past tasks."
+                  title={`Save conversation history so ${agentLabel || 'Anton'} can recall past tasks.`}
                   ariaLabel="Episodic memory"
                 />
               </Section>

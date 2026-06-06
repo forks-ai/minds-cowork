@@ -28,6 +28,7 @@ import { revealArtifact } from '../api';
 import { normalizeArtifactRecord } from '../lib/artifactPaths';
 import { host } from '../../platform/host';
 import { useBreakpoint } from '../hooks/useBreakpoint';
+import { harnessLabel } from '../lib/agentLabel';
 import { MINDS_BILLING_URL } from '../../pages/onboarding/constants';
 
 // Token shorthand mapped to our globals.css custom properties so the same
@@ -404,7 +405,7 @@ const CHAT_ORB_SIZE = 22;
 // ─── Anton answer turn — content stack ────────────────────────────────────
 // `slotIdHeader` lets the parent register an orb anchor beside the label
 // (while the request is in flight with no step row / body caret yet).
-function AnswerTurn({ state = 'done', time, children, showActions = true, copyText, onDelete, slotIdHeader }) {
+function AnswerTurn({ state = 'done', time, children, showActions = true, copyText, onDelete, slotIdHeader, agentLabel }) {
   // Stable id: never use Math.random() here (would churn register every render).
   const headerRef = useOrbitSlot(slotIdHeader ?? '__answer_header_inert__');
   return (
@@ -429,7 +430,7 @@ function AnswerTurn({ state = 'done', time, children, showActions = true, copyTe
           <span style={{
             fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 13,
             letterSpacing: '0.14em', textTransform: 'uppercase', color: T.ink,
-          }}>Anton</span>
+          }}>{agentLabel || 'Anton'}</span>
         </div>
         {time && (
           <span style={{ fontFamily: FONT_MONO, fontSize: 10.5, color: T.ink4, letterSpacing: '0.04em' }}>
@@ -807,6 +808,7 @@ export default function ChatView({
   // the active turn finishes.
   queuedMessages = [],
   onRemoveFromQueue,
+  agentLabel,
 }) {
   const scrollRef = useRef(null);
   const { isNarrow } = useBreakpoint();
@@ -1243,6 +1245,7 @@ export default function ChatView({
         <TaskMenu
           task={task}
           projects={projects}
+          agentLabel={agentLabel}
           open={settingsOpen}
           anchorRect={settingsAnchor}
           hideRename={false}
@@ -1347,7 +1350,7 @@ export default function ChatView({
                 // silent between user-send and first SSE chunk.
                 if (m.placeholder && !streamingMsg) {
                   return (
-                    <AnswerTurn key={i} state="thinking" time={formatTime(Date.now())} showActions={false}>
+                    <AnswerTurn key={i} state="thinking" time={formatTime(Date.now())} showActions={false} agentLabel={agentLabel}>
                       <div style={{
                         display: 'inline-flex', alignItems: 'center', gap: 6,
                         fontFamily: FONT_MONO, fontSize: 11, color: T.ink4,
@@ -1397,7 +1400,7 @@ export default function ChatView({
               }
               if (m.role === 'error') {
                 return (
-                  <AnswerTurn key={i} state="done" time={formatTime(m.createdAt)} showActions={false}>
+                  <AnswerTurn key={i} state="done" time={formatTime(m.createdAt)} showActions={false} agentLabel={agentLabel}>
                     <div style={{
                       border: '1px solid #F0C2B5',
                       background: '#FFF7F4',
@@ -1490,6 +1493,7 @@ export default function ChatView({
                   time={formatTime(m.createdAt)}
                   copyText={m.content}
                   onDelete={() => onDeleteTurn?.(turnIdxForThisBubble)}
+                  agentLabel={harnessLabel(m.harness) || 'Agent'}
                 >
                   {m.steps?.length > 0 && (
                     <ThinkingBlock
@@ -1513,12 +1517,16 @@ export default function ChatView({
             })()}
 
             {streamingMsg ? (
-              <AnswerTurn state="thinking" time={formatTime(Date.now())} showActions={false} slotIdHeader="header:streaming">
+              <AnswerTurn state="thinking" time={formatTime(Date.now())} showActions={false} slotIdHeader="header:streaming" agentLabel={harnessLabel(streamingMsg.harness) || agentLabel}>
                 {streamingMsg.steps?.length > 0 && (
                   <ThinkingBlock
                     steps={streamingMsg.steps}
                     startedAt={streamingMsg.startedAt}
                     isActive={streamingMsg.streamStatus !== 'done' && streamingMsg.streamStatus !== 'streaming'}
+                    currentLabel={(() => {
+                      const active = [...(streamingMsg.steps || [])].reverse().find(s => s.status === 'in_progress');
+                      return active?.label || null;
+                    })()}
                     onActivateStep={(step) => setOpenScratchpadStepId(prefixId(streamingKey, step.id))}
                   />
                 )}
@@ -1554,7 +1562,7 @@ export default function ChatView({
                 <StepArtifacts steps={streamingMsg.steps} onOpen={handleArtifactOpen} projectPath={artifactProjectPath} />
               </AnswerTurn>
             ) : isStreaming && (
-              <AnswerTurn state="thinking" time={formatTime(Date.now())} showActions={false}>
+              <AnswerTurn state="thinking" time={formatTime(Date.now())} showActions={false} agentLabel={agentLabel}>
                 <div style={{
                   display: 'inline-flex', alignItems: 'center', gap: 6,
                   fontFamily: FONT_MONO, fontSize: 11, color: T.ink4,
@@ -1606,7 +1614,7 @@ export default function ChatView({
                   background: 'var(--accent)',
                   boxShadow: '0 0 6px var(--accent-glow)',
                 }} />
-                {queuedMessages.length} queued · waiting for Anton
+                {queuedMessages.length} queued · waiting for {agentLabel || 'Anton'}
               </div>
               <div style={{
                 display: 'flex', flexWrap: 'wrap', gap: 6,

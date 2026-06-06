@@ -557,8 +557,8 @@ export async function writeMindsKeyToEnvAndRestart(apiKey: string): Promise<void
     `ANTON_OPENAI_API_KEY=${apiKey}`,
     `ANTON_MINDS_API_KEY=${apiKey}`,
     `ANTON_OPENAI_BASE_URL=${MINDS_LLM_BASE_URL}`,
-    'ANTON_PLANNING_PROVIDER=openai-compatible',
-    'ANTON_CODING_PROVIDER=openai-compatible',
+    'ANTON_PLANNING_PROVIDER=minds-cloud',
+    'ANTON_CODING_PROVIDER=minds-cloud',
     'ANTON_PLANNING_MODEL=latest:sonnet',
     'ANTON_CODING_MODEL=latest:haiku',
   );

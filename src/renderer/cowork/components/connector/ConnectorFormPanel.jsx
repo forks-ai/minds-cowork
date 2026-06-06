@@ -72,7 +72,7 @@ export default function ConnectorFormPanel({
             ...spec,
             _is_success: true,
             title: `${connector.label || connector.id} connected`,
-            subtitle: "Saved to Anton's data vault. Anton can now use this connection in tasks.",
+            subtitle: "Saved to the data vault. The agent can now use this connection in tasks.",
             actions: [{ id: 'dismiss', label: 'Close', kind: 'cancel' }],
           });
         }
@@ -161,7 +161,7 @@ export default function ConnectorFormPanel({
         ...spec,
         _is_success: true,
         title: `${connector.label || connector.id} connected`,
-        subtitle: 'Saved to Anton\'s data vault. Anton can now use this connection in tasks.',
+        subtitle: 'Saved to the data vault. The agent can now use this connection in tasks.',
         actions: [
           { id: 'dismiss', label: 'Close', kind: 'cancel' },
         ],

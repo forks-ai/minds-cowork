@@ -21,6 +21,10 @@ export const IPC = {
   UI_UPDATE_APPLY: 'ui:update-apply',
   UI_UPDATE_STATUS: 'ui:update-status',
 
+  // Server
+  SERVER_RESTART: 'server:restart',
+  SERVER_UPDATE_STATUS: 'server:update-status',
+
   // Auth
   AUTH_GET_ACCESS_TOKEN: 'auth:get-access-token',
   AUTH_LOGOUT: 'auth:logout',
