@@ -10,6 +10,7 @@
 
 import { useEffect, useState } from 'react';
 import Ico from '../components/Icons';
+import ChannelBindings from './ChannelBindings';
 import {
   fetchChannelPlugins,
   fetchChannelStatus,
@@ -202,6 +203,7 @@ export default function ChannelsView() {
             ))}
           </div>
         )}
+        {!loading && plugins.length > 0 ? <ChannelBindings plugins={plugins} /> : null}
       </main>
     </div>
   );

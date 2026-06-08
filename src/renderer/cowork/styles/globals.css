@@ -4959,3 +4959,15 @@ body[data-theme="light"] .anton-code-block .hljs-bullet { color: rgb(28, 76, 169
 .channels-btn:disabled { opacity: .7; cursor: not-allowed; }
 .channels-btn-primary { background: var(--accent, #1a1916); color: var(--accent-fg, #fff); border-color: transparent; }
 .channels-btn-ghost { background: transparent; }
+
+/* Channel routes (bindings) */
+.channels-routes { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--border-subtle, rgba(0,0,0,.08)); }
+.channels-routes-title { font-size: 14px; font-weight: 600; margin: 0 0 4px; }
+.channels-route-add { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 16px; }
+.channels-route-add .channels-input { flex: 1 1 140px; min-width: 120px; }
+.channels-route-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.channels-route-table th { text-align: left; font-weight: 500; color: var(--ink-4, #8a8a86); font-size: 11px; padding: 4px 8px; }
+.channels-route-table td { padding: 6px 8px; border-top: 1px solid var(--border-subtle, rgba(0,0,0,.06)); vertical-align: top; }
+.channels-input-sm { padding: 5px 8px; font-size: 12px; width: 100%; }
+.channels-route-actions { display: flex; gap: 6px; white-space: nowrap; }
+.channels-btn-sm { padding: 5px 10px; font-size: 12px; }
