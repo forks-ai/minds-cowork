@@ -11,6 +11,7 @@
 // Status dot: cyan = published, green-pulse = live preview, none = local.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import Ico from '../components/Icons';
 import {
   revealArtifact, publishArtifact, unpublishArtifact,
@@ -1372,19 +1373,23 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
         subtitleBottom={20}
       />
 
-      {/* Toast floats over the page so it can't perturb the
-          subtitle → search spacing. */}
-      <div style={{
-        position: 'fixed', top: 24, right: 32, zIndex: 70,
-        pointerEvents: toast?.message ? 'auto' : 'none',
-        maxWidth: 420,
-      }}>
-        <Toast
-          kind={toast?.kind}
-          message={toast?.message}
-          onClose={() => setToast(null)}
-        />
-      </div>
+      {/* Toast is portalled to document.body so it renders after modals
+          in DOM order, which prevents iframes inside modals from
+          compositing on top of it regardless of z-index. */}
+      {createPortal(
+        <div style={{
+          position: 'fixed', top: 24, right: 32, zIndex: 90,
+          pointerEvents: toast?.message ? 'auto' : 'none',
+          maxWidth: 420,
+        }}>
+          <Toast
+            kind={toast?.kind}
+            message={toast?.message}
+            onClose={() => setToast(null)}
+          />
+        </div>,
+        document.body,
+      )}
 
       {/* Subtitle → search-row gap. Set to 20px per the design;
           ProjectsView uses 18px because its header has an anchor
