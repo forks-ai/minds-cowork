@@ -1305,6 +1305,94 @@ export async function fetchBrowseStatus() {
   return req('/browse/status');
 }
 
+// ─── Channels ───────────────────────────────────────────────────────────────
+// Wraps /api/v1/channels/* on cowork-server. Plugins advertise a credential
+// schema + capability flags so the UI knows which fields/buttons to render;
+// secrets are masked on read (is_set / value:null) and only sent on write.
+
+export async function fetchChannelPlugins() {
+  try {
+    const data = await req('/channels/plugins');
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchChannelStatus() {
+  try {
+    return await req('/channels/status');
+  } catch {
+    return { plugin_count: 0, installation_count: 0, channels: [] };
+  }
+}
+
+export async function fetchChannelInstallations() {
+  try {
+    const data = await req('/channels/installations');
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchChannelConfig(channelType) {
+  return req(`/channels/${enc(channelType)}/config`);
+}
+
+export async function saveChannelConfig(channelType, values) {
+  return req(`/channels/${enc(channelType)}/config`, {
+    method: 'PUT',
+    body: JSON.stringify({ values: values || {} }),
+  });
+}
+
+export async function deleteChannelConfig(channelType) {
+  return req(`/channels/${enc(channelType)}/config`, { method: 'DELETE' });
+}
+
+// Rebuild the live adapter from stored config (no webhook registration).
+export async function reloadChannel(channelType) {
+  return req(`/channels/${enc(channelType)}/reload`, { method: 'POST' });
+}
+
+// Register the channel's inbound endpoint with the platform (Telegram setWebhook).
+// 501 when the channel has no lifecycle (gate on capabilities.supports_webhook_setup).
+export async function setupChannel(channelType) {
+  return req(`/channels/${enc(channelType)}/setup`, { method: 'POST' });
+}
+
+export async function teardownChannel(channelType) {
+  return req(`/channels/${enc(channelType)}/teardown`, { method: 'POST' });
+}
+
+// ── Channel bindings (wire an external chat/thread to a project/conversation) ──
+
+export async function fetchChannelBindings(channelType) {
+  const suffix = channelType ? `?channel_type=${enc(channelType)}` : '';
+  try {
+    const data = await req(`/channels/bindings${suffix}`);
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function createChannelBinding(payload) {
+  return req('/channels/bindings', { method: 'POST', body: JSON.stringify(payload || {}) });
+}
+
+export async function updateChannelBinding(bindingId, patch) {
+  return req(`/channels/bindings/${enc(bindingId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch || {}),
+  });
+}
+
+export async function deleteChannelBinding(bindingId) {
+  return req(`/channels/bindings/${enc(bindingId)}`, { method: 'DELETE' });
+}
+
 // ─── Attachments And Context ───────────────────────────────────────────────
 
 /** POST /v1/attachments/{project_name}/{session_id}/upload — response body is a JSON array of file attachments. */
