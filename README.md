@@ -145,9 +145,8 @@ unset (the Electron path), behavior is byte-identical to before.
 src/
   main/                  # Electron main process (Node.js)
     index.ts             # Window creation, IPC handlers, menu
-    installer.ts         # Auto-installer for cowork-server (uv + git + Xcode CLT)
+    installer.ts         # Auto-installer for Anton CLI (uv + git + Xcode CLT)
     server-process.ts    # FastAPI sidecar lifecycle (start/stop/health)
-    server-updater.ts    # OTA server update (PyPI check, upgrade, rollback)
     ui-updater.ts        # OTA UI update system (fetch, verify, cache, rollback)
     preload.ts           # contextBridge — exposes antontron API to renderer
   renderer/              # React UI (bundled by Vite)
@@ -168,13 +167,11 @@ assets/
 
 ### Key Design Decisions
 
-- **FastAPI sidecar**: The Electron main process manages the `cowork-server` Python FastAPI backend on `127.0.0.1:26866`, installed from [PyPI](https://pypi.org/project/cowork-server/) via `uv tool install`. The renderer communicates with Anton exclusively through this HTTP API — there is no PTY or terminal emulator.
+- **FastAPI sidecar**: The Electron main process manages a bundled Python FastAPI server on `127.0.0.1:26866`. The renderer communicates with Anton exclusively through this HTTP API — there is no PTY or terminal emulator.
 
 - **Minds integration**: The GUI replicates Anton's `/connect` flow — lists minds via REST API, handles datasource selection (normalizes string/object refs), writes the same env vars to `~/.anton/.env`, and auto-restarts Anton to pick up new config.
 
 - **OTA UI updates**: The Electron shell ships rarely, but the React UI updates frequently via GitHub Releases. On every boot, the main process checks a static `latest.json` on GitHub Pages (no API rate limits). In **auto** mode, new bundles are downloaded, SHA-256 verified, and applied silently — the app reloads with the new UI. In **manual** mode (the default), a green banner appears in the sidebar and the user clicks "Install" to apply. The update preference is persisted as `UI_UPDATE_MODE` in `~/.anton/.env` and configurable in Settings → Updates.
-
-- **OTA server updates**: After the server boots, the Electron main process checks PyPI for a newer `cowork-server` release. If one exists, it stops the server, runs `uv tool install --upgrade --reinstall cowork-server`, and restarts. If the new version fails its health check, the previous version is automatically reinstalled (rollback). The update is invisible to the user — the server is only down for the few seconds the upgrade takes. Disable with `COWORK_SERVER_DISABLE_AUTOUPDATE=1`. See `src/main/server-updater.ts`.
 
 ---
 
@@ -187,8 +184,8 @@ All channels defined in `src/shared/ipc-channels.ts`:
 | `install:check`                                     | invoke    | Check if Anton CLI is installed           |
 | `install:start`                                     | invoke    | Run the installer                         |
 | `install:log/progress/done/error`                   | send      | Installer status events                   |
-| `server:restart`                                    | invoke    | Restart the FastAPI sidecar                |
-| `server:update-status`                              | send      | Server OTA update progress (PyPI check)   |
+| `server:get-info/start/stop/toggle`                 | invoke    | FastAPI sidecar lifecycle                  |
+| `server:get-diagnostics`                            | invoke    | Last error, exit code, recent log tail    |
 | `oauth:connect`                                     | invoke    | PKCE OAuth loopback flow                  |
 | `settings:read/save/check-configured/validate`      | invoke    | Settings & API key management             |
 | `ui:update-check`                                   | invoke    | Check for OTA UI updates                  |
@@ -483,28 +480,9 @@ npm run dist:win
 
 ---
 
-## Over-the-Air Updates
+## Over-the-Air UI Updates
 
-Anton Desktop has two independent OTA update channels — **UI** and **server** — so both the React frontend and the Python backend can be updated without shipping a new `.dmg` or `.exe`. The Electron shell itself (main process, IPC, native OS integration) changes rarely and is updated via the traditional installer release flow.
-
-### Server Updates (PyPI)
-
-After the server boots successfully, the main process queries `https://pypi.org/pypi/cowork-server/json` for the latest published version. If a newer version exists:
-
-1. The running server is stopped
-2. `uv tool install --upgrade --reinstall cowork-server` installs the new version
-3. The server is restarted and its `/health` endpoint is probed
-4. If the health check fails, the previous version is reinstalled and restarted (automatic rollback)
-
-This happens silently on every app launch — users always get the latest `cowork-server` release within seconds of it being published to PyPI. Set `COWORK_SERVER_DISABLE_AUTOUPDATE=1` to opt out.
-
-The installer (`src/main/installer.ts`) uses a `>=` version floor (`cowork-server>=0.1.4`) so fresh installs also get the latest release. The minimum version is only bumped for breaking changes that require a specific baseline.
-
-See `src/main/server-updater.ts` for the full implementation.
-
-### UI Updates (GitHub Releases)
-
-The renderer (React UI) is where most iteration happens. Anton Desktop ships with an **OTA UI update system** that lets you push UI updates to every installed app.
+The desktop shell (Electron main process) handles IPC, the FastAPI sidecar, and native OS integration — it changes rarely. The renderer (React UI) is where most iteration happens. Anton Desktop ships with an **OTA update system** that lets you push UI updates to every installed app without shipping a new `.dmg` or `.exe`.
 
 ### Two-Repo Architecture
 
@@ -846,7 +824,6 @@ These are written to `~/.anton/.env` by the app and read by Anton at startup:
 | `ANTON_LANGFUSE_HEADERS`        | Manual      | Set to `1` to emit Langfuse-* headers on openai-compatible LLM calls (auto-enabled for MindsHub) |
 | `DEV_MODE`                      | Manual      | Renderer source override for developers (`live` = Vite dev server, `full` = bundled only, unset = production with OTA) |
 | `UI_UPDATE_MODE`                | Settings    | OTA update behavior (`auto` = apply silently, `manual` = show banner; default `manual`) |
-| `COWORK_SERVER_DISABLE_AUTOUPDATE` | Manual   | Set to `1` to skip automatic cowork-server PyPI updates on launch |
 
 ---
 
@@ -864,7 +841,7 @@ ls dist/renderer/index.html
 
 ### Anton shows "Disconnected" immediately after launch
 
-The packaged `.app` doesn't inherit shell PATH. The sidecar is spawned via the `uv tool install` interpreter, so ensure cowork-server is installed via `uv tool install cowork-server`. If issues persist, check that the binary at `~/.local/bin/cowork-server` exists.
+The packaged `.app` doesn't inherit shell PATH. The sidecar is spawned via the `uv tool install` interpreter, so ensure Anton is installed via `uv tool install anton`. If issues persist, check that the Python interpreter at `~/.local/share/uv/tools/anton/bin/python` exists.
 
 ### macOS Gatekeeper blocks unsigned app
 
@@ -881,7 +858,7 @@ xattr -cr "/Applications/Minds Cowork.app"
 | --------- | -------------------------------------- |
 | Framework | Electron 34                            |
 | Renderer  | React 19 + TypeScript + Vite 6         |
-| Backend   | FastAPI (Python, [cowork-server](https://pypi.org/project/cowork-server/) via PyPI) |
+| Backend   | FastAPI (Python, bundled sidecar)       |
 | Markdown  | marked 17                              |
 | Packaging | electron-builder 25                    |
 | Styling   | Tailwind CSS + custom theme            |
