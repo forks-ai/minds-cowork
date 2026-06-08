@@ -511,9 +511,9 @@ a[href],
 /* Lightweight hover utilities for inline-styled buttons that only need
    a tinted background on hover without a full component class. */
 .hover-tint { transition: background .12s, color .12s; }
-.hover-tint:hover { background: color-mix(in srgb, var(--ink) 10%, transparent); }
-.hover-tint-text:hover { color: var(--ink); }
-.hover-tint-danger:hover { color: var(--danger); }
+.hover-tint:hover { background: color-mix(in srgb, var(--ink) 5%, transparent) !important; }
+.hover-tint-text:hover { color: var(--ink) !important; }
+.hover-tint-danger:hover { color: var(--danger) !important; }
 
 .kbd {
   display: inline-flex; align-items: center; justify-content: center;

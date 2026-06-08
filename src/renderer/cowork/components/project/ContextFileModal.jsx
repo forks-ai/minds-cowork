@@ -588,7 +588,7 @@ export default function ContextFileModal({
                   cursor: busy ? 'not-allowed' : 'pointer',
                   background: 'transparent', border: 0,
                   color: 'var(--danger)',
-                  padding: '7px 0', borderRadius: 7,
+                  padding: '7px 14px', borderRadius: 7,
                   fontFamily: FONT_BODY, fontSize: 12.5, fontWeight: 500,
                   opacity: busy ? 0.5 : 1,
                 }}
