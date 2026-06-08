@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useId } from 'react';
 import Ico from '../components/Icons';
-import { validateSettings, revealSettingKey, testProviders } from '../api';
+import { validateSettings, revealSettingKey, testProviders, fetchHealth } from '../api';
 import { providerTypeToKeyField, providerValueToType } from '../lib/settingsTransform';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { host } from '../../platform/host';
@@ -698,7 +698,9 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
   // keeps the text input visible even when the typed value is empty.
   const [modelInputMode, setModelInputMode] = useState({ planning: false, coding: false });
   const [uiVersion, setUiVersion] = useState('');
+  const [serverVersion, setServerVersion] = useState('');
   useEffect(() => { getUIVersion().then(setUiVersion).catch(() => {}); }, []);
+  useEffect(() => { fetchHealth().then((h) => setServerVersion(h?.server_version || '')).catch(() => {}); }, []);
   // Tracks whether any LLM-affecting setting changed since the last
   // successful Save. Used to skip provider tests on a no-op Save so a
   // user just toggling appearance doesn't pay the network round-trip.
@@ -1829,7 +1831,7 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
             <CollapsibleGroup title="Updates" defaultOpen={false}>
               <Section
                 title="Current version"
-                subtitle="The app and UI bundle versions currently running."
+                subtitle="The app, UI bundle, and server versions currently running."
               >
                 <div style={{
                   display: 'flex', flexWrap: 'wrap', gap: '6px 16px',
@@ -1855,6 +1857,12 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
                     <span>
                       <span style={{ color: 'var(--text-muted)', marginRight: 4 }}>UI</span>
                       bundled
+                    </span>
+                  )}
+                  {serverVersion && (
+                    <span>
+                      <span style={{ color: 'var(--text-muted)', marginRight: 4 }}>Server</span>
+                      {serverVersion}
                     </span>
                   )}
                 </div>
