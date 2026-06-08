@@ -61,7 +61,7 @@ function ChannelCard({ plugin, status, onChanged }) {
 
       if (caps.supports_webhook_setup) {
         const r = await setupChannel(plugin.channel_type);
-        setNotice(r?.active ? 'Connected — webhook registered.' : (r?.detail || 'Setup ran.'));
+        setNotice(r?.detail || (r?.active ? 'Connected.' : 'Setup ran.'));
       } else {
         const r = await reloadChannel(plugin.channel_type);
         setNotice(r?.active
