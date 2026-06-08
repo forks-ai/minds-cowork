@@ -1869,7 +1869,7 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
               </Section>
               <Section
                 title="UI updates"
-                subtitle="How over-the-air UI updates are applied when a new version is published."
+                subtitle="How over-the-air UI updates are applied when a new version is published. Server updates are always applied automatically on launch."
               >
                 <Segmented
                   value={settings.uiUpdateMode ?? 'auto'}
