@@ -332,6 +332,7 @@ export default function ServerOfflineHelpModal({
               overflow: 'auto',
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
+              userSelect: 'text',
             }}>{log || '(no log captured yet)'}</pre>
           </div>
 

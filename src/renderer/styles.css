@@ -478,6 +478,7 @@ body[data-theme="dark"] .legal-viewer-overlay {
   font-size: 11px;
   line-height: 1.6;
   color: var(--text-secondary);
+  user-select: text;
   animation: fadeInUp 0.6s ease-out 0.2s both;
 }
 

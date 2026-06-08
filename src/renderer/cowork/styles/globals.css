@@ -313,6 +313,10 @@ body {
      window-level bg so the gravity-field canvas remains visible. */
   user-select: none;
 }
+::selection {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  color: inherit;
+}
 button { font-family: inherit; cursor: pointer; }
 input, textarea { font-family: inherit; }
 
