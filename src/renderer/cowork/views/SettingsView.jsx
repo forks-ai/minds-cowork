@@ -1834,7 +1834,7 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
                 subtitle="The app, UI bundle, and server versions currently running."
               >
                 <div style={{
-                  display: 'flex', flexWrap: 'wrap', gap: '6px 16px',
+                  display: 'flex', flexDirection: 'column', gap: 6,
                   fontFamily: 'var(--font-mono)', fontSize: 12.5,
                   color: 'var(--text-strong)',
                 }}>
