@@ -25,7 +25,12 @@ import {
 function StatusBadge({ active, configured }) {
   const label = active ? 'Active' : configured ? 'Configured' : 'Not connected';
   const tone = active ? 'ok' : configured ? 'warn' : 'idle';
-  return <span className={`channels-badge channels-badge-${tone}`}>{label}</span>;
+  return (
+    <span className={`channels-badge channels-badge-${tone}`}>
+      <span className="channels-led" aria-hidden="true" />
+      {label}
+    </span>
+  );
 }
 
 function ChannelCard({ plugin, status, onChanged }) {
