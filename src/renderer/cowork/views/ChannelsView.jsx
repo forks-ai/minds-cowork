@@ -20,7 +20,62 @@ import {
   reloadChannel,
   setupChannel,
   teardownChannel,
+  fetchChannelAgent,
+  setChannelAgent,
 } from '../api';
+
+// Which harness answers in channels — distinct from the desktop harness
+// toggle. Changing it applies to NEW conversations; existing chats stay pinned
+// to the agent that first served them.
+function ChannelAgentSelect() {
+  const [agent, setAgent] = useState(null);   // { harness, options }
+  const [saving, setSaving] = useState(false);
+  const [note, setNote] = useState('');
+
+  useEffect(() => { fetchChannelAgent().then(setAgent); }, []);
+
+  async function change(harness) {
+    setSaving(true); setNote('');
+    try {
+      const r = await setChannelAgent(harness);
+      setAgent(r);
+      const n = r?.reset_conversations || 0;
+      setNote(n > 0
+        ? `Saved — ${n} active chat${n === 1 ? '' : 's'} will continue with ${harness} on the next message.`
+        : `Saved — channels now use ${harness}.`);
+    } catch (err) {
+      setNote(err?.message || 'Could not change the channel agent');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!agent || !(agent.options || []).length) return null;
+  return (
+    <div className="channels-agent">
+      <span className="channels-agent-label">Channel agent</span>
+      <div className="channels-agent-tabs" role="tablist" aria-label="Channel agent">
+        {agent.options.map((o) => (
+          <button
+            key={o}
+            type="button"
+            role="tab"
+            aria-selected={o === agent.harness}
+            className={`channels-agent-tab${o === agent.harness ? ' is-active' : ''}`}
+            disabled={saving}
+            onClick={() => { if (o !== agent.harness) change(o); }}
+          >
+            {o}
+          </button>
+        ))}
+      </div>
+      <span className="channels-agent-hint">
+        Switching restarts active chats with the new agent on their next message.
+      </span>
+      {note ? <span className="channels-notice">{note}</span> : null}
+    </div>
+  );
+}
 
 function StatusBadge({ active, configured }) {
   const label = active ? 'Active' : configured ? 'Configured' : 'Not connected';
@@ -188,10 +243,11 @@ export default function ChannelsView() {
           {Ico.refresh(15)}
         </button>
       </header>
-      <main className="channels-content">
+      <main className="channels-content scroll-clean">
         <p className="channels-intro">
           Connect a messaging app so people can talk to the agent from their chats.
         </p>
+        <ChannelAgentSelect />
         {loading ? (
           <p className="channels-muted">Loading channels…</p>
         ) : plugins.length === 0 ? (

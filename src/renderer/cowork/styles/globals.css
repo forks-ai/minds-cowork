@@ -4930,7 +4930,10 @@ body[data-theme="light"] .anton-code-block .hljs-bullet { color: rgb(28, 76, 169
 /* ── Channels (ChannelsView) ─────────────────────────────────────────── */
 .channels-view { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--fg); }
 .channels-top { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border-subtle, rgba(0,0,0,.08)); font-family: var(--font-display, inherit); font-size: 15px; font-weight: 600; }
-.channels-content { padding: 20px; overflow-y: auto; }
+/* flex:1 + min-height:0 give the scroll container a bounded height inside the
+   flex column; without them the content grows past the window and the inner
+   scroll never engages (most visible in the fixed-height Electron shell). */
+.channels-content { flex: 1; min-height: 0; padding: 20px; overflow-y: auto; }
 .channels-intro { color: var(--ink-3, #6b6a66); margin: 0 0 16px; font-size: 13px; }
 .channels-muted { color: var(--ink-4, #8a8a86); font-size: 13px; }
 .channels-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
@@ -4955,6 +4958,21 @@ body[data-theme="light"] .anton-code-block .hljs-bullet { color: rgb(28, 76, 169
 /* Not connected — inert grey LED. */
 .channels-badge-idle { background: rgba(0,0,0,.06); color: var(--ink-4, #8a8a86); }
 .channels-badge-idle .channels-led { background: var(--ink-4, #8a8a86); }
+.channels-agent { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 0 0 16px; }
+.channels-agent-label { font-size: 12px; font-weight: 600; color: var(--fg); }
+/* Segmented tab control for picking the channel agent. */
+.channels-agent-tabs { display: inline-flex; gap: 2px; padding: 2px; border-radius: 9px; background: color-mix(in srgb, var(--fg) 6%, transparent); border: 1px solid var(--border-subtle, rgba(0,0,0,.1)); }
+.channels-agent-tab {
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  color: var(--ink-3, #6b6b6b); font: inherit; font-size: 12px; font-weight: 500;
+  text-transform: capitalize; padding: 4px 14px; border-radius: 7px;
+  transition: background .12s ease, color .12s ease;
+}
+.channels-agent-tab:hover:not(.is-active):not(:disabled) { color: var(--fg); background: color-mix(in srgb, var(--fg) 6%, transparent); }
+.channels-agent-tab.is-active { background: var(--accent, #1a1916); color: var(--accent-fg, #fff); }
+.channels-agent-tab:disabled { cursor: default; opacity: .65; }
+.channels-agent-hint { font-size: 11px; color: var(--ink-4, #8a8a86); }
+
 .channels-fields { display: flex; flex-direction: column; gap: 10px; }
 .channels-field { display: flex; flex-direction: column; gap: 4px; }
 .channels-field-label { font-size: 12px; display: flex; align-items: center; gap: 6px; }

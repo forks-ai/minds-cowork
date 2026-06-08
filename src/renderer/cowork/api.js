@@ -1336,6 +1336,20 @@ export async function fetchChannelInstallations() {
   }
 }
 
+// The harness that serves channel conversations (separate from the desktop
+// harness). Returns the current value plus the registered options.
+export async function fetchChannelAgent() {
+  try {
+    return await req('/channels/agent');
+  } catch {
+    return { harness: '', options: [] };
+  }
+}
+
+export async function setChannelAgent(harness) {
+  return req('/channels/agent', { method: 'PUT', body: JSON.stringify({ harness }) });
+}
+
 export async function fetchChannelConfig(channelType) {
   return req(`/channels/${enc(channelType)}/config`);
 }
