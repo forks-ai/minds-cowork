@@ -15,7 +15,7 @@ import ScheduledView from './views/ScheduledView';
 import TasksView from './views/TasksView';
 import ScheduleDetailView from './views/ScheduleDetailView';
 import ArtifactsView from './views/ArtifactsView';
-import DispatchView from './views/DispatchView';
+import ChannelsView from './views/ChannelsView';
 import CustomizeView from './views/CustomizeView';
 import SettingsView from './views/SettingsView';
 import UtilitiesView from './views/UtilitiesView';
@@ -3463,7 +3463,7 @@ function AppCore() {
         )}
 
         {route === 'dispatch' && (
-          <DispatchView onSetUpLater={() => setRoute('home')} agentLabel={agentLabel} />
+          <ChannelsView />
         )}
 
         {route === 'customize' && (
