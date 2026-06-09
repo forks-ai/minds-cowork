@@ -6,7 +6,7 @@ import * as https from 'https';
 import * as http from 'http';
 import { IPC } from '../shared/ipc-channels';
 import { checkInstallStatus, runInstaller } from './installer';
-import { startServer, stopServer, isServerRunning, isServerStarting, getServerPort, getServerDiagnostics } from './server-process';
+import { startServer, stopServer, isServerRunning, isServerStarting, getServerPort, getServerDiagnostics, getServerLogPath } from './server-process';
 import { maybeUpdateServer, setUpdateNotifier } from './server-updater';
 import { oauthConnect, cancelCurrentOAuth } from './oauth-service';
 import { saveTokens, getAccessToken, getRefreshToken, clearTokens } from './token-store';
@@ -778,6 +778,32 @@ app.whenReady().then(() => {
         ],
       },
       { role: 'windowMenu' },
+      {
+        role: 'help',
+        submenu: [
+          {
+            label: 'Anton Cowork Documentation',
+            click: () => {
+              shell.openExternal('https://docs.mindsdb.com');
+            },
+          },
+          { type: 'separator' },
+          {
+            label: 'Reveal Logs in Finder',
+            click: () => {
+              /* showItemInFolder needs the file to exist; before the server
+                 has ever started there's no log yet, so fall back to opening
+                 the logs directory itself. */
+              const logPath = getServerLogPath();
+              if (fs.existsSync(logPath)) {
+                shell.showItemInFolder(logPath);
+              } else {
+                shell.openPath(path.dirname(logPath));
+              }
+            },
+          },
+        ],
+      },
     ];
     Menu.setApplicationMenu(Menu.buildFromTemplate(template));
   }
