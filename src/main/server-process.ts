@@ -53,6 +53,35 @@ function appendStderr(chunk: string) {
   recentStderr = (recentStderr + chunk).slice(-STDERR_BUFFER_BYTES);
 }
 
+/* On-disk log file. The in-memory `recentStderr` tail is only ~32 KB and
+   dies with the app; the log file gives the user (and the Help > Reveal
+   Logs menu item) the full server output for the current session,
+   surviving until the next start. Opened fresh on each spawn so the file
+   reflects the live session rather than growing unbounded across runs. */
+let logStream: fs.WriteStream | null = null;
+
+export function getServerLogPath(): string {
+  /* getPath('logs') resolves to ~/Library/Logs/<AppName> on macOS. Electron
+     does not guarantee the directory exists, so create it before use. */
+  const dir = app.getPath('logs');
+  fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, 'cowork-server.log');
+}
+
+function openLogStream(): void {
+  try {
+    logStream?.end();
+    logStream = fs.createWriteStream(getServerLogPath(), { flags: 'w' });
+  } catch {
+    /* Logging to disk is best-effort — never let it block server startup. */
+    logStream = null;
+  }
+}
+
+function writeLog(text: string): void {
+  logStream?.write(text);
+}
+
 // Kill a child process and its entire process group (POSIX). When we
 // spawn with detached:true the child leads its own group, so
 // process.kill(-pid) reaches grandchildren (e.g. python spawned by uv).
@@ -250,6 +279,8 @@ export async function startServer(opts: { port?: number; readyTimeoutMs?: number
     // we can kill the entire tree (uv + grandchild python) with a single
     // process.kill(-pid). Without this, SIGTERM only reaches `uv` and
     // the grandchild python survives, holding the port.
+    openLogStream();
+
     const child = spawn(spawnCmd, spawnArgs, {
       cwd: spawnCwd,
       env,
@@ -264,11 +295,13 @@ export async function startServer(opts: { port?: number; readyTimeoutMs?: number
       // through logging.error often land on stdout too. Buffer both
       // so the help modal has the complete picture.
       appendStderr(text);
+      writeLog(text);
       process.stdout.write(`[cowork-server] ${text}`);
     });
     child.stderr.on('data', (d) => {
       const text = d.toString();
       appendStderr(text);
+      writeLog(text);
       process.stderr.write(`[cowork-server] ${text}`);
     });
     child.on('exit', (code) => {
@@ -282,6 +315,9 @@ export async function startServer(opts: { port?: number; readyTimeoutMs?: number
       // panel instead of a calm "you stopped it" message.
       lastStopIntentional = _stopRequested;
       _stopRequested = false;
+      logStream?.write(`\n[cowork-server] process exited with code ${code}\n`);
+      logStream?.end();
+      logStream = null;
       if (code !== 0 && code !== null) {
         console.error(`[cowork-server] exited with code ${code}`);
       }
