@@ -15,6 +15,7 @@ import {
 } from '../../api';
 import { copyText } from '../../lib/clipboard';
 import { Modal } from '../ui/Modal';
+import { ConfirmModal } from '../ConfirmModal';
 import { host } from '../../../platform/host';
 import { MarkdownContent } from '../markdown/MarkdownContent';
 
@@ -384,6 +385,8 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
   const [publishedUrl, setPublishedUrl] = useState(artifact?.publishedUrl || '');
   const [busy, setBusy] = useState(false);
   const [menuRect, setMenuRect] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const kebabRef = useRef(null);
 
   const isText = _isTextArtifact(artifact);
@@ -578,18 +581,21 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
     // download actually starts; revoking synchronously cancels it.
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
-  const onTrash = async () => {
+  const onTrash = () => {
     if (busy) return;
     if (!hasActionPath) {
       setErr(disabledReason || 'This artifact does not have a local file path.');
       return;
     }
+    setConfirmDelete(true);
+  };
+  const onConfirmDelete = async () => {
     // Deletion is centralized through cowork-server (not shell.trashItem)
     // so the server's unpublish-before-delete guard always runs. The whole
     // artifact folder is removed (not just the primary file) so metadata.json
     // goes too and the artifact disappears from the listing. The viewer
     // closes once the file is gone so we don't leave a dead preview on screen.
-    setBusy(true);
+    setDeleteBusy(true);
     setErr('');
     try {
       // Unpublish first so deletion never leaves an orphaned public copy.
@@ -598,12 +604,15 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
         await unpublishArtifact(actionPath);
       }
       await deleteArtifact(artifact?.folder || actionPath);
+      setConfirmDelete(false);
       onDelete?.(actionPath);
       onClose?.();
     } catch (e) {
+      setDeleteBusy(false);
+      setConfirmDelete(false);
       setErr(e?.message || 'Delete failed');
     } finally {
-      setBusy(false);
+      setDeleteBusy(false);
     }
   };
   const onOpenPublished = async () => {
@@ -934,6 +943,20 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
             ) : null
           )}
         </div>
+
+        {/* Delete confirmation */}
+        <ConfirmModal
+          open={confirmDelete}
+          title="Delete artifact?"
+          message={`"${artifact.title || artifact.path?.split('/').pop()}" will be permanently deleted. This cannot be undone.`}
+          confirmLabel="Delete"
+          destructive
+          busy={deleteBusy}
+          busyLabel="Deleting…"
+          onConfirm={onConfirmDelete}
+          onClose={() => { if (!deleteBusy) setConfirmDelete(false); }}
+        />
+
     </Modal>
   );
 }
