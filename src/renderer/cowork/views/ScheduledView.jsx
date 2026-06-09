@@ -455,7 +455,7 @@ function ScheduleListRow({
       >
         <RowAction icon={Ico.send(12)} label="Run" onClick={onRunNow} busy={busy} />
         {task.enabled
-          ? <RowAction icon={Ico.stop(12)}  label="Pause"  onClick={onPause}  busy={busy} />
+          ? <RowAction icon={Ico.pause(12)} label="Pause"  onClick={onPause}  busy={busy} />
           : <RowAction icon={Ico.power(12)} label="Resume" onClick={onResume} busy={busy} />}
         <RowAction icon={Ico.edit(12)} label="Edit" onClick={onEdit} busy={busy} />
       </div>

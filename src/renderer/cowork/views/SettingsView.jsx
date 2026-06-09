@@ -184,7 +184,7 @@ function Section({ title, subtitle, children }) {
   return (
     <div className="settings-section" style={{
       display: 'grid', gridTemplateColumns: '1fr 320px', gap: 24,
-      padding: '16px 0', borderBottom: '1px solid var(--border-subtle)',
+      padding: '16px 0',
       alignItems: 'flex-start',
     }}>
       <div>
@@ -1255,7 +1255,6 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
                     gridTemplateColumns: '1fr 380px auto',
                     gap: 24,
                     padding: '16px 0',
-                    borderBottom: '1px solid var(--border-subtle)',
                     alignItems: 'flex-start',
                   }}>
                     <div>
