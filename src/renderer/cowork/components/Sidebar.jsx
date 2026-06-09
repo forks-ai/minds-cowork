@@ -33,7 +33,7 @@ function NavItem({ icon, label, active, onClick, badge, comingSoon, compact }) {
       data-coming-soon={comingSoon ? '' : undefined}
       style={comingSoon ? { opacity: 0.55, cursor: 'default' } : undefined}
     >
-      <span className="nav-row__icon" style={{ display: 'inline-flex' }}>{icon}</span>
+      <span className="nav-row__icon" style={{ display: 'inline-flex', flexShrink: 0, alignItems: 'center' }}>{icon}</span>
       <span className="nav-row__label" style={{ flex: 1 }}>{label}</span>
       {badge != null && (
         <span className="nav-row__badge pill muted" style={{ fontSize: 10 }}>{badge}</span>

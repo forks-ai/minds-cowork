@@ -42,7 +42,9 @@ if SPA_DIR.exists():
 
     @app.get("/health")
     async def health_compat():
-        """Compat endpoint — proxies to /api/v1/health for callers that probe /health."""
+        # Compat endpoint — proxies to /api/v1/health for callers that probe /health.
+        # Called from mindshub_frontend to establish instance health -- update
+        # there before removing here
         from cowork.api.v1.endpoints.health import health
 
         return health()
@@ -51,7 +53,10 @@ if SPA_DIR.exists():
     async def root():
         return FileResponse(str(_spa_shell))
 
-    @app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+    @app.api_route(
+        "/{full_path:path}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    )
     async def spa_fallback(full_path: str, request: Request):
         # /api/* paths must never serve the SPA shell in place of a
         # missing API endpoint. Routes are registered with trailing

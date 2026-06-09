@@ -20,7 +20,7 @@ interface InstallerOptions {
 // cowork release that requires backend changes. The installer will
 // install at least this version (a minimum floor), picking up any
 // newer compatible releases automatically.
-const COWORK_SERVER_MIN_VERSION = '0.1.3';
+const COWORK_SERVER_MIN_VERSION = '0.1.4';
 
 // Package source for cowork-server. Override with COWORK_SERVER_PACKAGE
 // env var (e.g. a local path or alternative git URL during development).
@@ -63,6 +63,27 @@ function getUvBinary(): string {
   return path.join(localBin, 'uv');
 }
 
+function findUv(): string | null {
+  const explicit = getUvBinary();
+  if (fileExists(explicit)) return explicit;
+
+  if (process.platform === 'win32' && process.env.LOCALAPPDATA) {
+    const winCandidate = path.join(process.env.LOCALAPPDATA, 'bin', 'uv.exe');
+    if (fileExists(winCandidate)) return winCandidate;
+  }
+
+  const cargoBin = path.join(os.homedir(), '.cargo', 'bin', process.platform === 'win32' ? 'uv.exe' : 'uv');
+  if (fileExists(cargoBin)) return cargoBin;
+
+  if (process.platform === 'darwin') {
+    for (const p of ['/opt/homebrew/bin/uv', '/usr/local/bin/uv']) {
+      if (fileExists(p)) return p;
+    }
+  }
+
+  return null;
+}
+
 function getEnvPath(): string {
   const localBin = getLocalBin();
   const cargoBin = path.join(os.homedir(), '.cargo', 'bin');
@@ -93,7 +114,7 @@ function runCommand(
   command: string,
   args: string[],
   win: BrowserWindow,
-  opts?: { shell?: boolean; shouldAbort?: () => boolean }
+  opts?: { shell?: boolean; shouldAbort?: () => boolean; env?: NodeJS.ProcessEnv }
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const env = {
@@ -101,6 +122,9 @@ function runCommand(
       PATH: getEnvPath(),
       PYTHONUTF8: '1',
       PYTHONIOENCODING: 'utf-8',
+      // Caller-supplied overrides (e.g. UV_PYTHON_PREFERENCE for the
+      // `uv tool install` step) win over the inherited environment.
+      ...(opts?.env ?? {}),
     };
     const proc = spawn(command, args, {
       env,
@@ -249,8 +273,53 @@ export async function checkCoworkServerInstalled(): Promise<boolean> {
       : path.join(__dirname, '..', '..', '..', '..', 'cowork-server');
     if (fileExists(path.join(devDir, 'pyproject.toml'))) return true;
   }
-  if (fileExists(getCoworkServerBinary())) return true;
-  return commandExists('cowork-server');
+  const hasBinary = fileExists(getCoworkServerBinary()) || await commandExists('cowork-server');
+  if (!hasBinary) return false;
+
+  // Binary exists — verify the installed version meets the minimum.
+  // An outdated version may be missing new dependencies (e.g. alembic)
+  // and crash on import, so we treat it as "not installed" to trigger
+  // the installer which does --force --reinstall.
+  const installedVersion = await getInstalledVersion();
+  if (!installedVersion) {
+    console.log('[installer] cowork-server version could not be determined, reinstall needed');
+    return false;
+  }
+  if (compareVersions(installedVersion, COWORK_SERVER_MIN_VERSION) < 0) {
+    console.log(
+      `[installer] cowork-server ${installedVersion} is below minimum ${COWORK_SERVER_MIN_VERSION}, needs upgrade`,
+    );
+    return false;
+  }
+  return true;
+}
+
+/** Get the installed cowork-server version from `uv tool list`. */
+function getInstalledVersion(): Promise<string | null> {
+  const uvBin = findUv();
+  if (!uvBin) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    execFile(uvBin, ['tool', 'list'], { env: { ...process.env, PATH: getEnvPath() }, timeout: 10000 }, (err, stdout) => {
+      if (err) { resolve(null); return; }
+      for (const line of stdout.split('\n')) {
+        const match = line.match(/^cowork-server\s+v?([\d.]+)/);
+        if (match) { resolve(match[1]); return; }
+      }
+      resolve(null);
+    });
+  });
+}
+
+/** Compare two X.Y.Z version strings. Returns <0 if a < b, 0 if equal, >0 if a > b. */
+function compareVersions(a: string, b: string): number {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
 }
 
 // Convenience wrapper used by the boot flow IPC. Returns the full
@@ -409,7 +478,18 @@ export async function runInstaller(win: BrowserWindow, opts?: InstallerOptions):
       '--force', '--reinstall',
     ];
 
-    const installResult = await runCommand(uvBin, installArgs, win, { shouldAbort });
+    /*
+     * UV_PYTHON_PREFERENCE=only-managed — without this uv builds the tool
+     * venv on whatever base interpreter it discovers on PATH (Anaconda /
+     * Miniconda, the Windows Store python stub, …). Those bases are not
+     * self-contained, so the resulting venv can be broken or fail to launch
+     * outside their activation shell. A uv-managed standalone CPython has no
+     * such dependency, and uv fetches it on demand if absent.
+     */
+    const uvEnv: NodeJS.ProcessEnv = { UV_PYTHON_PREFERENCE: 'only-managed' };
+    sendLog(win, 'Python: uv-managed (UV_PYTHON_PREFERENCE=only-managed)\n');
+
+    const installResult = await runCommand(uvBin, installArgs, win, { shouldAbort, env: uvEnv });
     if (abortIfRequested()) return false;
 
     if (installResult.code !== 0) {

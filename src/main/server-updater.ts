@@ -97,11 +97,11 @@ function fetchLatestVersion(): Promise<string | null> {
  *  or by asking uv. Falls back to reading the package metadata. */
 function getInstalledVersion(uv: string): Promise<string | null> {
   return new Promise((resolve) => {
-    // `uv tool list` outputs lines like "cowork-server v0.1.2"
+    // `uv tool list` outputs lines like "cowork-server v0.1.4"
     execFile(uv, ['tool', 'list'], { env: { ...process.env, PATH: getEnvPath() }, timeout: 10000 }, (err, stdout) => {
       if (err) { resolve(null); return; }
       for (const line of stdout.split('\n')) {
-        // Format: "cowork-server v0.1.2" or "cowork-server v0.1.2 (cowork-server)"
+        // Format: "cowork-server v0.1.4" or "cowork-server v0.1.4 (cowork-server)"
         const match = line.match(/^cowork-server\s+v?([\d.]+)/);
         if (match) { resolve(match[1]); return; }
       }
@@ -127,12 +127,14 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-/** Run `uv tool install --upgrade cowork-server`. */
+/** Run `uv tool install --upgrade --reinstall cowork-server`.
+ *  The --reinstall flag ensures the tool venv is rebuilt from scratch,
+ *  picking up newly-added dependencies (e.g. alembic added in 0.1.4). */
 function runUpgrade(uv: string): Promise<{ ok: boolean; stderr: string }> {
   return new Promise((resolve) => {
     execFile(
       uv,
-      ['tool', 'install', '--upgrade', PACKAGE_NAME],
+      ['tool', 'install', '--upgrade', '--reinstall', PACKAGE_NAME],
       { env: { ...process.env, PATH: getEnvPath() }, timeout: 120000 },
       (err, _stdout, stderr) => {
         resolve({ ok: !err, stderr: stderr || err?.message || '' });

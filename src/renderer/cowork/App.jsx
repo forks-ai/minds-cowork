@@ -56,6 +56,27 @@ const CONNECT_FOLLOWUPS = [
   "Any questions about the setup? I'm here to help.",
 ];
 
+// Print a version/build banner to the browser console on startup so
+// developers and QA can quickly confirm which releases are running.
+// UI line prints immediately (build-time). Server versions are fetched
+// eagerly from /health so they appear even if AppCore hasn't mounted.
+{
+  const ui = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '?';
+  const hash = typeof __GIT_HASH__ !== 'undefined' && __GIT_HASH__ ? __GIT_HASH__ : '';
+  const built = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : '';
+  console.log(
+    '%c Anton %c Build Info ',
+    'background:#7CC4B6;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px 0 0 3px',
+    'background:#334;color:#eee;padding:2px 6px;border-radius:0 3px 3px 0',
+  );
+  console.log(`  UI (cowork):  ${ui}${hash ? ` (${hash})` : ''}${built ? `  built ${built}` : ''}`);
+  fetchHealth().then((h) => {
+    if (!h || h.status === 'offline') return;
+    console.log(`  Server (cowork-server):  ${h.server_version || '?'}`);
+    console.log(`  Agent (anton-agent):     ${h.anton_version || '?'}`);
+  }).catch(() => {});
+}
+
 // Build a short context block describing the user's current
 // connect-form state. Sent appended to chat messages so the agent
 // has continuous awareness of what the user is connecting and how
@@ -87,6 +108,24 @@ function describeConnectFormState(state) {
 
 function isPendingFileAttachment(a) {
   return !!(a && a.pendingFile instanceof File);
+}
+
+function isAntonConfigError(message, event) {
+  const text = String(message || '');
+  return (
+    event?.code === 'config_required' ||
+    /Configure ANTON_/i.test(text) ||
+    /Could not resolve authentication method/i.test(text) ||
+    /Expected one of api_key, auth_token, or credentials/i.test(text)
+  );
+}
+
+function normalizeAntonError(message, event) {
+  if (isAntonConfigError(message, event)) {
+    return 'No LLM provider is configured for this account. Subscribe with MindsHub or add your own provider in Settings.';
+  }
+  const text = String(message || '');
+  return text || 'Anton could not complete this task.';
 }
 
 async function resolveComposerAttachmentsForSend(projectName, sessionId, attachments) {
@@ -1467,11 +1506,15 @@ function AppCore() {
         const finalSteps = streamState.steps;
         const finalStartedAt = streamState.startedAt;
         const finalHarness = streamState.harness;
+        const configErrorInBody = finalContent && isAntonConfigError(finalContent, null);
         let assistantTurnIndex = 0;
         setTasks((prev) => prev.map((t) => {
           if (t.id !== taskId) return t;
           const msgs = markActivityDone(removeThinkingPlaceholder(stripStreaming(t.messages)));
           assistantTurnIndex = msgs.filter((m) => m.role === 'assistant').length;
+          if (configErrorInBody) {
+            return { ...t, status: 'idle', messages: [...msgs, { role: 'provider_required' }] };
+          }
           return finalContent
             ? { ...t, status: 'idle', messages: [...msgs, {
                 role: 'assistant',
@@ -1482,12 +1525,14 @@ function AppCore() {
               }] }
             : { ...t, status: 'idle', messages: msgs };
         }));
-        if (finalContent) {
+        if (finalContent && !configErrorInBody) {
           persistTurnState(taskId, assistantTurnIndex, finalSteps, finalStartedAt);
         }
         fetchArtifacts().then((data) => { if (Array.isArray(data)) setArtifacts(data); });
       },
       onError(message, event) {
+        const configError = isAntonConfigError(message, event);
+        const displayError = normalizeAntonError(message, event);
         activeStreamCtrlRef.current = null;
         activeScratchpadRef.current = null;
         activeStreamingTaskIdRef.current = null;
@@ -1495,7 +1540,10 @@ function AppCore() {
         setTasks((prev) => prev.map((t) => {
           if (t.id !== taskId) return t;
           const msgs = markActivityDone(removeThinkingPlaceholder(stripStreaming(t.messages)));
-          return { ...t, status: 'error', messages: [...msgs, { role: 'error', content: message || `${agentLabel} could not complete this task.`, code: event?.code }] };
+          const trailer = configError
+            ? { role: 'provider_required' }
+            : { role: 'error', content: displayError, code: event?.code };
+          return { ...t, status: configError ? 'idle' : 'error', messages: [...msgs, trailer] };
         }));
       },
     });
@@ -2035,8 +2083,63 @@ function AppCore() {
     }
   };
 
+  // Authoritative provider-readiness check, run right before a send.
+  // We can't trust the in-memory `health` here: it's fetched at boot
+  // and on focus, so right after a fresh sign-in (especially a free
+  // account that lands without a key) it can still read stale —
+  // config_ready=true from the previous user, or undefined before the
+  // first fetch lands. Either way the old gate (`config_ready !== false`)
+  // would pass and we'd start a turn against a missing/foreign key,
+  // which is exactly the "it does operations then shows the upgrade
+  // card" bug. Re-fetch /health synchronously so the provider-required
+  // card shows immediately, before any operation runs. Falls back to
+  // the cached value only if the live fetch fails.
+  const ensureProviderReady = useCallback(async () => {
+    try {
+      const fresh = await fetchHealth();
+      if (fresh && typeof fresh === 'object') {
+        setHealth(fresh);
+        setServerOnline(fresh.status === 'ok');
+        return fresh.config_ready !== false;
+      }
+    } catch {
+      // Network blip — fall through to the cached value.
+    }
+    return health?.config_ready !== false;
+  }, [health]);
+
   // Send from the home screen — creates a new session
   const handleSendFromHome = async (text) => {
+    // Preflight: no provider configured → render an action card task
+    // instead of routing through anton's LLM path.
+    if (!(await ensureProviderReady())) {
+      const taskId = `tmp-${Date.now()}`;
+      const effectiveProjectName = selectedProject?.name || 'general';
+      const effectiveProjectPath = selectedProject?.path
+        || projects.find((p) => p.name === 'general')?.path
+        || null;
+      setTasks((prev) => [{
+        id: taskId,
+        title: text.length > 60 ? text.slice(0, 57) + '…' : text,
+        subtitle: 'just now',
+        status: 'idle',
+        messages: [
+          { role: 'user', content: text, attachments: [] },
+          { role: 'provider_required' },
+        ],
+        projectPath: effectiveProjectPath,
+        projectName: effectiveProjectName,
+        model: selectedModel?.id ?? null,
+        attachments: [],
+        disabledConnections: [],
+        updatedAt: new Date().toISOString(),
+      }, ...prev]);
+      setActiveTaskId(taskId);
+      setRoute('task');
+      setComposerAttachments([]);
+      return;
+    }
+
     // Orphan fallback: if the user hasn't picked a project, route the
     // task into "general" (server provisions it on startup). If for
     // any reason it isn't in the projects list yet (e.g. an upgrade
@@ -2218,6 +2321,11 @@ function AppCore() {
         const finalSteps = streamState.steps;
         const finalStartedAt = streamState.startedAt;
         const finalHarness = streamState.harness;
+        // Anton sometimes wraps auth failures into a 200 stream that
+        // emits the error as plain assistant text. Detect that case
+        // and replace the assistant turn with the provider_required
+        // card instead of rendering the raw SDK message.
+        const configErrorInBody = finalContent && isAntonConfigError(finalContent, null);
         let assistantTurnIndex = 0;
         setTasks((prev) => prev.map((t) => {
           if (t.id !== finalId && t.id !== resolvedId && t.id !== taskId) return t;
@@ -2227,6 +2335,9 @@ function AppCore() {
           // expects on reload (the merge walks assistant messages in
           // the same order and looks up by index).
           assistantTurnIndex = msgs.filter((m) => m.role === 'assistant').length;
+          if (configErrorInBody) {
+            return { ...t, id: finalId, status: 'idle', messages: [...msgs, { role: 'provider_required' }] };
+          }
           return finalContent
             ? { ...t, id: finalId, status: 'idle', messages: [...msgs, {
                 role: 'assistant',
@@ -2243,19 +2354,24 @@ function AppCore() {
         // inline artifact cards, and scratchpad tabs. Anton's own
         // history file doesn't carry step metadata, so this is a
         // sidecar in localStorage.
-        if (finalContent) {
+        if (finalContent && !configErrorInBody) {
           persistTurnState(finalId, assistantTurnIndex, finalSteps, finalStartedAt);
         }
         fetchArtifacts().then((data) => { if (Array.isArray(data)) setArtifacts(data); });
       },
       onError(message, event) {
+        const configError = isAntonConfigError(message, event);
+        const displayError = normalizeAntonError(message, event);
         activeStreamCtrlRef.current = null;
         activeScratchpadRef.current = null;
         activeStreamingTaskIdRef.current = null;
         setTasks((prev) => prev.map((t) => {
           if (t.id !== resolvedId && t.id !== taskId) return t;
           const msgs = markActivityDone(removeThinkingPlaceholder(stripStreaming(t.messages)));
-          return { ...t, status: 'error', messages: [...msgs, { role: 'error', content: message || `${agentLabel} could not complete this task.`, code: event?.code }] };
+          const trailer = configError
+            ? { role: 'provider_required' }
+            : { role: 'error', content: displayError, code: event?.code };
+          return { ...t, status: configError ? 'idle' : 'error', messages: [...msgs, trailer] };
         }));
         fetchHealth().then((h) => setHealth(h));
       },
@@ -2274,6 +2390,27 @@ function AppCore() {
   const handleSendInTask = async (text) => {
     if (!currentTask) return;
     const id = currentTask.id;
+
+    // Preflight: same gate as handleSendFromHome. Append the user's
+    // turn + the action card and stop before any in-flight reservation.
+    if (!(await ensureProviderReady())) {
+      setTasks((prev) => prev.map((t) =>
+        t.id === id
+          ? {
+              ...t,
+              status: 'idle',
+              updatedAt: new Date().toISOString(),
+              messages: [
+                ...t.messages,
+                { role: 'user', content: text, attachments: [] },
+                { role: 'provider_required' },
+              ],
+            }
+          : t,
+      ));
+      setComposerAttachments([]);
+      return;
+    }
 
     // Anton-core can't run two turns in parallel against the same
     // conversation, so if a stream is in flight (or one is about to
@@ -2434,11 +2571,15 @@ function AppCore() {
         const finalSteps = streamState.steps;
         const finalStartedAt = streamState.startedAt;
         const finalHarness = streamState.harness;
+        const configErrorInBody = finalContent && isAntonConfigError(finalContent, null);
         let assistantTurnIndex = 0;
         setTasks((prev) => prev.map((t) => {
           if (t.id !== id && t.id !== resolvedId) return t;
           const msgs = markActivityDone(removeThinkingPlaceholder(stripStreaming(t.messages)));
           assistantTurnIndex = msgs.filter((m) => m.role === 'assistant').length;
+          if (configErrorInBody) {
+            return { ...t, status: 'idle', messages: [...msgs, { role: 'provider_required' }] };
+          }
           return finalContent
             ? { ...t, status: 'idle', messages: [...msgs, {
                 role: 'assistant',
@@ -2449,7 +2590,7 @@ function AppCore() {
               }] }
             : { ...t, status: 'idle', messages: msgs };
         }));
-        if (finalContent) {
+        if (finalContent && !configErrorInBody) {
           // Sidecar — see persistTurnState comment for the full schema.
           persistTurnState(resolvedId, assistantTurnIndex, finalSteps, finalStartedAt);
         }
@@ -2464,6 +2605,8 @@ function AppCore() {
         }
       },
       onError(message, event) {
+        const configError = isAntonConfigError(message, event);
+        const displayError = normalizeAntonError(message, event);
         activeStreamCtrlRef.current = null;
         activeScratchpadRef.current = null;
         activeStreamingTaskIdRef.current = null;
@@ -2472,7 +2615,10 @@ function AppCore() {
         setTasks((prev) => prev.map((t) => {
           if (t.id !== id && t.id !== resolvedId) return t;
           const msgs = markActivityDone(removeThinkingPlaceholder(stripStreaming(t.messages)));
-          return { ...t, status: 'error', messages: [...msgs, { role: 'error', content: message || `${agentLabel} could not complete this task.`, code: event?.code }] };
+          const trailer = configError
+            ? { role: 'provider_required' }
+            : { role: 'error', content: displayError, code: event?.code };
+          return { ...t, status: configError ? 'idle' : 'error', messages: [...msgs, trailer] };
         }));
         fetchHealth().then((h) => setHealth(h));
         // Same drain on error so a failed turn doesn't strand the
@@ -3138,6 +3284,7 @@ function AppCore() {
           <ChatView
             task={currentTask}
             onSend={handleSendInTask}
+            onOpenSettings={() => setRoute('settings')}
             queuedMessages={messageQueue[currentTask?.id] || []}
             onRemoveFromQueue={(itemId) => removeFromQueue(currentTask?.id, itemId)}
             onBack={() => {

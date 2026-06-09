@@ -1,9 +1,17 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
+import { execSync } from 'child_process';
 
 const pkg = JSON.parse(readFileSync(path.resolve(__dirname, '../../package.json'), 'utf-8'));
+
+// Bake the git commit hash into the bundle so it's available at runtime
+// for diagnostics. Falls back gracefully outside a git repo.
+let gitHash = '';
+try {
+  gitHash = execSync('git rev-parse --short HEAD', { cwd: __dirname, encoding: 'utf-8' }).trim();
+} catch { /* not a git repo or git not available */ }
 
 // Two build targets share this config:
 //   - electron (default): outputs to dist/renderer/, entry index.html → main.tsx,
@@ -35,6 +43,8 @@ export default defineConfig({
   plugins: [react(), ...(IS_WEB ? [webRootRewrite] : [])],
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
+    __GIT_HASH__: JSON.stringify(gitHash),
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
   },
   root: __dirname,
   base: './',
