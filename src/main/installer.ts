@@ -114,7 +114,7 @@ function runCommand(
   command: string,
   args: string[],
   win: BrowserWindow,
-  opts?: { shell?: boolean; shouldAbort?: () => boolean }
+  opts?: { shell?: boolean; shouldAbort?: () => boolean; env?: NodeJS.ProcessEnv }
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const env = {
@@ -122,6 +122,9 @@ function runCommand(
       PATH: getEnvPath(),
       PYTHONUTF8: '1',
       PYTHONIOENCODING: 'utf-8',
+      // Caller-supplied overrides (e.g. UV_PYTHON_PREFERENCE for the
+      // `uv tool install` step) win over the inherited environment.
+      ...(opts?.env ?? {}),
     };
     const proc = spawn(command, args, {
       env,
@@ -475,7 +478,18 @@ export async function runInstaller(win: BrowserWindow, opts?: InstallerOptions):
       '--force', '--reinstall',
     ];
 
-    const installResult = await runCommand(uvBin, installArgs, win, { shouldAbort });
+    /*
+     * UV_PYTHON_PREFERENCE=only-managed — without this uv builds the tool
+     * venv on whatever base interpreter it discovers on PATH (Anaconda /
+     * Miniconda, the Windows Store python stub, …). Those bases are not
+     * self-contained, so the resulting venv can be broken or fail to launch
+     * outside their activation shell. A uv-managed standalone CPython has no
+     * such dependency, and uv fetches it on demand if absent.
+     */
+    const uvEnv: NodeJS.ProcessEnv = { UV_PYTHON_PREFERENCE: 'only-managed' };
+    sendLog(win, 'Python: uv-managed (UV_PYTHON_PREFERENCE=only-managed)\n');
+
+    const installResult = await runCommand(uvBin, installArgs, win, { shouldAbort, env: uvEnv });
     if (abortIfRequested()) return false;
 
     if (installResult.code !== 0) {
