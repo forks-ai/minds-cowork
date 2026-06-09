@@ -253,6 +253,7 @@ export default function HomeView({
   configReady, configError, onOpenSettings,
   serverOnline = false, onShowServerHelp,
   skipIntro = false,
+  agentLabel,
 }) {
   useEffect(() => { _ensureBootKeyframes(); }, []);
 

@@ -586,10 +586,14 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
     // No confirmation modal — `shell.trashItem` is recoverable from the
     // user's Trash, so a click is reversible. The viewer closes once
     // the file is gone so we don't leave a dead preview on screen.
+    // Trash the entire artifact folder (not just the primary file) so
+    // the metadata.json is also removed and the artifact disappears
+    // from the listing.
     setBusy(true);
     setErr('');
     try {
-      const result = await host.trashItem(actionPath);
+      const trashTarget = artifact?.folder || actionPath;
+      const result = await host.trashItem(trashTarget);
       if (result && result.ok === false) {
         throw new Error(result.reason || 'Could not move to Trash.');
       }
