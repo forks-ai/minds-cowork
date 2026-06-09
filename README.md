@@ -212,12 +212,23 @@ All channels defined in `src/shared/ipc-channels.ts`:
 | `install:check`                                     | invoke    | Check if cowork-server is installed       |
 | `install:start`                                     | invoke    | Run the installer                         |
 | `install:log/progress/done/error`                   | send      | Installer status events                   |
-| `server:restart`                                    | invoke    | Restart the FastAPI sidecar               |
-| `server:update-status`                              | send      | Server OTA update progress (PyPI check)   |
+| `install:cancel`                                    | invoke    | Cancel an in-progress install             |
+| `install:cancelled`                                 | send      | Confirms install was cancelled            |
 | `settings:read/save/check-configured/validate`      | invoke    | Settings & API key management             |
+| `terms:accept`                                      | invoke    | Record terms acceptance                   |
 | `ui:update-check`                                   | invoke    | Check for OTA UI updates                  |
 | `ui:update-apply`                                   | invoke    | Download and apply a pending UI update    |
 | `ui:update-status`                                  | send      | Update status events (available/reloading)|
+| `server:restart`                                    | invoke    | Restart the FastAPI sidecar               |
+| `server:update-status`                              | send      | Server OTA update progress (PyPI check)   |
+| `auth:get-access-token`                             | invoke    | Retrieve current access token             |
+| `auth:logout`                                       | invoke    | Clear auth session                        |
+| `oauth:cancel`                                      | invoke    | Cancel an in-progress PKCE OAuth flow     |
+| `mindshub:login`                                    | invoke    | Start MindsHub OAuth login                |
+| `mindshub:refresh`                                  | invoke    | Refresh MindsHub token                    |
+| `mindshub:finalize`                                 | invoke    | Commit MindsHub credentials to env        |
+| `mindshub:get-cached-token`                         | invoke    | Read cached MindsHub token                |
+| `app:ready`                                         | send      | App finished initializing                 |
 | `app:get-platform/ui-version/open-external`         | invoke    | Platform info, open URLs                  |
 | `shell:show-item-in-folder`                         | invoke    | OS shell operations                       |
 
