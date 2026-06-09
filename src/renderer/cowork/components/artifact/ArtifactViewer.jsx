@@ -479,7 +479,12 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
     // Prefer the parent's visibility chooser (public vs password). Fall
     // back to a direct public publish when no chooser is wired.
     if (onRequestPublish) {
-      onRequestPublish(artifact);
+      setBusy(true);
+      try {
+        await onRequestPublish(artifact);
+      } finally {
+        setBusy(false);
+      }
       return;
     }
     setBusy(true);
