@@ -11,6 +11,7 @@ import {
   previewArtifact,
   publishArtifact,
   unpublishArtifact,
+  deleteArtifact,
 } from '../../api';
 import { copyText } from '../../lib/clipboard';
 import { Modal } from '../ui/Modal';
@@ -583,20 +584,20 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
       setErr(disabledReason || 'This artifact does not have a local file path.');
       return;
     }
-    // No confirmation modal — `shell.trashItem` is recoverable from the
-    // user's Trash, so a click is reversible. The viewer closes once
-    // the file is gone so we don't leave a dead preview on screen.
-    // Trash the entire artifact folder (not just the primary file) so
-    // the metadata.json is also removed and the artifact disappears
-    // from the listing.
+    // Deletion is centralized through cowork-server (not shell.trashItem)
+    // so the server's unpublish-before-delete guard always runs. The whole
+    // artifact folder is removed (not just the primary file) so metadata.json
+    // goes too and the artifact disappears from the listing. The viewer
+    // closes once the file is gone so we don't leave a dead preview on screen.
     setBusy(true);
     setErr('');
     try {
-      const trashTarget = artifact?.folder || actionPath;
-      const result = await host.trashItem(trashTarget);
-      if (result && result.ok === false) {
-        throw new Error(result.reason || 'Could not move to Trash.');
+      // Unpublish first so deletion never leaves an orphaned public copy.
+      // The server enforces the same rule as a backstop.
+      if (publishedUrl) {
+        await unpublishArtifact(actionPath);
       }
+      await deleteArtifact(artifact?.folder || actionPath);
       onDelete?.(actionPath);
       onClose?.();
     } catch (e) {
@@ -824,9 +825,10 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
           anchorRect={menuRect}
           onClose={() => setMenuRect(null)}
           items={[
-            // Open in OS / Delete drop out in the hosted web shell —
-            // both depend on the renderer sharing a filesystem with the
-            // server, which is only true in Electron.
+            // "Open in OS" drops out in the hosted web shell — it depends
+            // on the renderer sharing a filesystem with the server, which
+            // is only true in Electron. Delete stays available everywhere
+            // because it runs server-side via cowork-server.
             ...(host.isWeb ? [] : [{
               label: 'Open in OS',
               icon: Ico.externalLink(13),
@@ -839,16 +841,14 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
               disabled: busy || !hasActionPath,
               onClick: publishedUrl ? onUnpublish : onPublish,
             },
-            ...(host.isWeb ? [] : [
-              { divider: true },
-              {
-                label: 'Delete',
-                icon: Ico.trash(13),
-                danger: true,
-                disabled: busy || !hasActionPath,
-                onClick: onTrash,
-              },
-            ]),
+            { divider: true },
+            {
+              label: 'Delete',
+              icon: Ico.trash(13),
+              danger: true,
+              disabled: busy || !hasActionPath,
+              onClick: onTrash,
+            },
           ]}
         />
 

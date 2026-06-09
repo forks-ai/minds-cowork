@@ -15,6 +15,7 @@ import Ico from '../components/Icons';
 import {
   openArtifact, revealArtifact,
   publishArtifact, unpublishArtifact,
+  deleteArtifact,
   artifactServeUrl, openArtifactFile,
 } from '../api';
 import { copyText } from '../lib/clipboard';
@@ -885,9 +886,9 @@ function RowMenu({ open, anchorRect, artifact, onClose, onOpen, onReveal, onCopy
       )}
       {/* Delete sits at the bottom under a divider so it reads as a
           terminal / destructive action distinct from the rest of
-          the menu. Routes through the parent's `handleTrash` which
-          uses Electron's `shell.trashItem` — the file goes to the
-          OS Trash, not unlinked, so the action is recoverable. */}
+          the menu. Routes through the parent's `handleTrash`, which
+          unpublishes (if published) and then permanently deletes via
+          cowork-server. */}
       {onDelete && (
         <>
           <div style={{ height: 1, background: 'var(--line)', margin: '4px 0' }} />
@@ -1293,24 +1294,19 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
     }
   };
 
-  // Move the file to the OS Trash and drop it from the local list.
-  // Reuses the Electron `shell.trashItem` IPC the artifact viewer
-  // also calls, so the deletion is reversible from the user's
-  // Trash / Recycle Bin (no extra confirm modal needed).
   const handleTrash = async (artifact) => {
     if (!artifact?.path || busyPaths.has(artifact.path)) return;
     setBusy(artifact.path, true);
     try {
-      // Trash the entire artifact folder (not just the primary file) so
-      // metadata.json is also removed and the artifact disappears from
-      // the server listing on next fetch.
-      const trashTarget = artifact.folder || artifact.path;
-      const result = await host.trashItem(trashTarget);
-      if (result && result.ok === false) {
-        throw new Error(result.reason || 'Could not move to Trash.');
+      // Unpublish first so deletion never leaves an orphaned public copy.
+      // If this fails we abort and keep the artifact (the server enforces
+      // the same rule as a backstop).
+      if (artifact.publishedUrl) {
+        await unpublishArtifact(artifact.path);
       }
+      await deleteArtifact(artifact.folder || artifact.path);
       removeOne(artifact.path);
-      setToast({ kind: 'ok', message: 'Moved to Trash.' });
+      setToast({ kind: 'ok', message: 'Deleted.' });
     } catch (e) {
       setToast({ kind: 'error', message: `Delete failed: ${e?.message || e}` });
     } finally {
@@ -1450,10 +1446,7 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
               onOpenViewer={setViewer}
               onPublish={handlePublish}
               onUnpublish={handleUnpublish}
-              // host.trashItem is Electron-only — gate the delete
-              // option to native runs so the web shell doesn't show
-              // a menu item that wouldn't work.
-              onDelete={!host.isWeb ? handleTrash : undefined}
+              onDelete={handleTrash}
               onOpenProject={onOpenProject}
             />
           ))}
@@ -1538,17 +1531,14 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
               onClick: () => { try { revealArtifact(a.path); } catch {} },
             });
           }
-          // Delete uses host.trashItem (OS Trash) — no equivalent in web.
-          if (!host.isWeb) {
-            items.push({ separator: true });
-            items.push({
-              id: 'delete',
-              label: 'Delete',
-              icon: Ico.trash(13),
-              danger: true,
-              onClick: () => handleTrash(a),
-            });
-          }
+          items.push({ separator: true });
+          items.push({
+            id: 'delete',
+            label: 'Delete',
+            icon: Ico.trash(13),
+            danger: true,
+            onClick: () => handleTrash(a),
+          });
           return items;
         })()}
       />
