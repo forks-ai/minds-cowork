@@ -451,9 +451,12 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
       return () => { cancelled = true; };
     }
     mountArtifactPreview(actionPath)
-      .then(async ({ kind, url, artifactDir, port, proxyUrl, publishedUrl: serverPublishedUrl }) => {
+      .then(async ({ kind, url, artifactDir, port, proxyUrl, publishedUrl: serverPublishedUrl, backendRunning, launchError }) => {
         if (kind === 'proxy') {
           if (!artifactDir) throw new Error('Preview mount returned no artifact dir');
+          if (backendRunning === false) {
+            throw new Error(launchError || 'Backend failed to start');
+          }
           if (!proxyUrl) throw new Error('Preview proxy unavailable');
           // Realign hostname onto the SPA's own host so the parent page
           // and iframe stay same-site — the server hardcodes
