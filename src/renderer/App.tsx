@@ -188,7 +188,7 @@ export default function App() {
           <div className="logo-section shared-logo">
             <div className="logo-brand">
               <MindsLogo size={120} />
-              <span className="logo-brand-text">Minds Cowork</span>
+              <span className="logo-brand-text">MindsHub Cowork</span>
             </div>
           </div>
 
@@ -205,9 +205,9 @@ export default function App() {
         <div className="launch-screen">
           <div className="logo-brand">
             <MindsLogo size={120} />
-            <span className="logo-brand-text">Minds Cowork</span>
+            <span className="logo-brand-text">MindsHub Cowork</span>
           </div>
-          <div className="launch-text">Starting Minds Cowork...</div>
+          <div className="launch-text">Starting MindsHub Cowork...</div>
           <div className="launch-bar">
             <div className="launch-bar-fill" />
           </div>

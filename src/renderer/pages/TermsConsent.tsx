@@ -328,7 +328,7 @@ export default function TermsConsent({ onAccept }: { onAccept: () => void }) {
         {/* Short explainer beneath the CTA — reassures the user that
             this is just an install, not a credential dance. */}
         <p className="terms-setup-note">
-          We&rsquo;ll install and prepare the system dependencies Minds Cowork needs.
+          We&rsquo;ll install and prepare the system dependencies MindsHub Cowork needs.
           Takes about a minute.
         </p>
     </div>
