@@ -905,6 +905,18 @@ export async function fetchSettings() {
         result.configError = v.configError;
         result.providerLabel = v.provider;
       } catch { /* leave defaults */ }
+      // Overlay the server's recommended-models (MindsHub's live `/v1/models`
+      // list for minds-cloud). Falls back to the static lists seeded by
+      // transformSettingsRows when the endpoint is absent or unreachable.
+      try {
+        const rec = await req('/settings/recommended-models');
+        if (rec?.recommendedModels) {
+          result.recommendedModels = { ...result.recommendedModels, ...rec.recommendedModels };
+        }
+        if (rec?.recommendedPair) {
+          result.recommendedPair = { ...result.recommendedPair, ...rec.recommendedPair };
+        }
+      } catch { /* keep static fallback */ }
       _lastFetchedSettings = result;
       return result;
     } catch {
