@@ -199,7 +199,7 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
         'openai-compatible',
         apiKey.trim(),
         `${mindsBase}/v1`,
-        '_code_'
+        'latest:haiku'
       );
 
       if (llmResult.ok) {
@@ -211,8 +211,10 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
           ...mindsLines,
           'ANTON_PLANNING_PROVIDER=minds-cloud',
           'ANTON_CODING_PROVIDER=minds-cloud',
-          'ANTON_PLANNING_MODEL=_reason_',
-          'ANTON_CODING_MODEL=_code_',
+          // MindsHub `latest:*` aliases — mirrors RECOMMENDED_PAIR['minds-cloud'].
+          // The deprecated MindsHub sentinel aliases are hidden from /v1/models.
+          'ANTON_PLANNING_MODEL=latest:sonnet',
+          'ANTON_CODING_MODEL=latest:haiku',
         ];
         await saveFinal(lines);
       } else {
