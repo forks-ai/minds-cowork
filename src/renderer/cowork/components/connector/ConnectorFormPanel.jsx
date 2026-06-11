@@ -6,11 +6,11 @@
 // The form spec we hand to <DataVaultForm /> is the connector's
 // `form` field, exactly the shape the renderer already expects.
 // onAction is the only handler we own: cancel → close, primary →
-// saveDatasource() → success state → close.
+// saveConnector() → success state → close.
 
 import { useState, useEffect, useRef } from 'react';
 import { DataVaultForm } from '../datavault/DataVaultForm';
-import { saveDatasource, fetchDatasources, startGoogleDriveAuth, startGoogleCalendarAuth, startGmailAuth, startGoogleAdsAuth, startGoogleAnalyticsAuth, startGcpAuth, fetchIntegrations } from '../../api';
+import { saveConnector, fetchDatasources, startGoogleDriveAuth, startGoogleCalendarAuth, startGmailAuth, startGoogleAdsAuth, startGoogleAnalyticsAuth, startGcpAuth, fetchIntegrations } from '../../api';
 
 const BROWSER_OAUTH_START = {
   google_drive: startGoogleDriveAuth,
@@ -138,13 +138,17 @@ export default function ConnectorFormPanel({
     setBusy(true);
     setErrorMsg('');
     try {
-      const payload = {
-        engine: connector.id,
+      // Save through the connector-aware endpoint — the same live
+      // path the agent-driven DataVaultFormPanel uses. (The old
+      // saveDatasource() → POST /datasources flow was retired in the
+      // cowork-server backend integration and is now a no-op stub, so
+      // this panel's saves silently vanished.) Field names must match
+      // the server's SaveConnectorRequest: method / name / values.
+      const saved = await saveConnector(connector.id, {
+        method: action.authMethod || null,
         name: existingName || '',
-        authMethod: action.authMethod || null,
-        credentials: action.values || {},
-      };
-      const saved = await saveDatasource(payload);
+        values: action.values || {},
+      });
       // Refresh the connectors-list cache so the host's UI reflects
       // the new connection without a manual reload.
       try {
