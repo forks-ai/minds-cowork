@@ -19,7 +19,7 @@
   --arc-edge-2: #2e2e44;
   --arc-ink: #ecedf6;
   --arc-muted: #8d8fa8;
-  --arc-dim: #5b5d78;
+  --arc-dim: #7c7fa0;
   --arc-cyan: #3dd6f5;
   --arc-green: #4ade80;
   --arc-yellow: #fbbf24;
@@ -184,6 +184,12 @@
 }
 
 .arc-press:focus-visible { outline: 2px dashed var(--arc-cyan); outline-offset: 4px; }
+
+/* Inert "LOCKED" prompt — no blink, no pointer, muted. */
+.arc-press-off {
+  color: var(--arc-dim);
+  cursor: not-allowed;
+}
 
 /* ── Buttons ───────────────────────────────────────────────────────── */
 
@@ -756,6 +762,10 @@
   vertical-align: text-bottom;
   background: var(--arc-cyan);
   animation: arc-blink 0.9s steps(2, jump-none) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .arc-caret { animation: none; }
 }
 
 /* ── Legal viewer ──────────────────────────────────────────────────── */

@@ -1,7 +1,28 @@
 // Shared chrome + primitives for the arcade onboarding screens.
 
-import { useEffect, useState, type ReactNode, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type ReactNode, type CSSProperties } from 'react';
 import './arcade.css';
+
+/**
+ * Tracks the user's `prefers-reduced-motion` setting, live. The CSS
+ * animations already gate on the media query; this is the JS-side
+ * equivalent so timers/intervals (typewriter, marquee) can render their
+ * final state immediately instead of animating.
+ */
+export function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return false;
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const onChange = () => setReduced(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return reduced;
+}
 
 /** Full-screen CRT shell: P1 · centered title · ©2026 MINDSDB. */
 export function ArcadeShell({
@@ -40,21 +61,34 @@ export function PressPrompt({
   onPress: () => void;
   disabled?: boolean;
 }) {
+  // Keep the latest onPress in a ref so the window listener doesn't need
+  // to re-bind every render (callers pass inline closures).
+  const onPressRef = useRef(onPress);
+  onPressRef.current = onPress;
+
   useEffect(() => {
     if (disabled) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== 'Enter') return;
-      // Don't steal Enter from form fields (inputs handle their own).
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-      onPress();
+      // Don't steal Enter when focus is on an interactive element — the
+      // element fires its own activation (a focused button/link triggers
+      // onClick on Enter; inputs submit). Honoring it here too would
+      // double-fire (e.g. a focused cartridge confirming twice).
+      const el = (e.target as HTMLElement | null);
+      if (el && (el.closest('button, a, input, select, textarea'))) return;
+      onPressRef.current();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onPress, disabled]);
+  }, [disabled]);
 
   return (
-    <button type="button" className="arc-press arc-blink" onClick={onPress} disabled={disabled}>
+    <button
+      type="button"
+      className={`arc-press${disabled ? ' arc-press-off' : ' arc-blink'}`}
+      onClick={onPress}
+      disabled={disabled}
+    >
       {label}
     </button>
   );
@@ -75,8 +109,21 @@ export function Typewriter({
   style?: CSSProperties;
 }) {
   const [count, setCount] = useState(0);
+  const reducedMotion = usePrefersReducedMotion();
+  // onDone in a ref so a new inline closure each render doesn't restart
+  // the typing interval; `done` latches so it fires exactly once.
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
+  const doneRef = useRef(false);
 
   useEffect(() => {
+    doneRef.current = false;
+    if (reducedMotion) {
+      // Skip the per-character crawl entirely: show the full string and
+      // signal completion on the next tick.
+      setCount(text.length);
+      return;
+    }
     setCount(0);
     const id = setInterval(() => {
       setCount((c) => {
@@ -85,14 +132,15 @@ export function Typewriter({
       });
     }, speed);
     return () => clearInterval(id);
-  }, [text, speed]);
+  }, [text, speed, reducedMotion]);
 
   useEffect(() => {
-    if (count >= text.length && onDone) {
-      const t = setTimeout(onDone, 350);
+    if (count >= text.length && !doneRef.current) {
+      doneRef.current = true;
+      const t = setTimeout(() => onDoneRef.current?.(), reducedMotion ? 0 : 350);
       return () => clearTimeout(t);
     }
-  }, [count, text, onDone]);
+  }, [count, text, reducedMotion]);
 
   return (
     <span style={style}>
@@ -127,15 +175,19 @@ export function PixelProgress({
 /** Indeterminate marquee progress (single lit block sweeping). */
 export function PixelMarquee({ cells = 24, style }: { cells?: number; style?: CSSProperties }) {
   const [pos, setPos] = useState(0);
+  const reducedMotion = usePrefersReducedMotion();
   useEffect(() => {
+    if (reducedMotion) return; // hold a static frame instead of sweeping
     const id = setInterval(() => setPos((p) => (p + 1) % (cells + 4)), 90);
     return () => clearInterval(id);
-  }, [cells]);
+  }, [cells, reducedMotion]);
   return (
     <div className="arc-bar" style={style} aria-hidden>
       {Array.from({ length: cells }, (_, i) => {
-        const d = pos - i;
-        const on = d >= 0 && d < 4; // 4-block comet
+        // Reduced motion: a steady centered block instead of a sweep.
+        const on = reducedMotion
+          ? i >= Math.floor(cells / 2) - 2 && i < Math.floor(cells / 2) + 2
+          : (() => { const d = pos - i; return d >= 0 && d < 4; })();
         return <div key={i} className={`arc-bar-cell ${on ? 'on' : ''}`} />;
       })}
     </div>

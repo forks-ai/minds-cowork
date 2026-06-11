@@ -5,7 +5,7 @@
 // host calls, same .env lines, same backend sync — re-skinned as the
 // stage where you plug a power source into the coworker you just chose.
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { host } from '../../platform/host';
 import { BASE } from '../../cowork/api';
 import { PROVIDER_MODELS } from '../../cowork/lib/settingsTransform';
@@ -91,6 +91,55 @@ async function syncHarness(harnessId: string): Promise<void> {
   } catch {}
 }
 
+// The provider→validation-target and provider→env-vars mappings are
+// identical whether BYOK runs directly (Stage 1) or as the LLM step after
+// MindsHub (Stage 2). Shared here so the two call sites can't drift (they
+// previously diverged on the openai-compatible "not-needed" fallback).
+function resolveValidationTarget(
+  bp: ByokProvider,
+  customBaseUrl: string,
+): { provider: string; baseUrl: string | undefined } {
+  const provider = bp === 'anthropic' ? 'anthropic' : 'openai-compatible';
+  const baseUrl =
+    bp === 'openai' ? 'https://api.openai.com/v1'
+    : bp === 'gemini' ? GEMINI_BASE_URL
+    : bp === 'openai-compatible' ? customBaseUrl.trim()
+    : undefined;
+  return { provider, baseUrl };
+}
+
+function buildProviderEnv(
+  bp: ByokProvider,
+  key: string,
+  customBaseUrl: string,
+  model: string,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  if (bp === 'anthropic') {
+    env.ANTON_ANTHROPIC_API_KEY = key;
+    env.ANTON_PLANNING_PROVIDER = 'anthropic';
+    env.ANTON_CODING_PROVIDER = 'anthropic';
+  } else if (bp === 'gemini') {
+    env.ANTON_OPENAI_API_KEY = key;
+    env.ANTON_OPENAI_BASE_URL = GEMINI_BASE_URL;
+    env.ANTON_PLANNING_PROVIDER = 'openai-compatible';
+    env.ANTON_CODING_PROVIDER = 'openai-compatible';
+  } else if (bp === 'openai-compatible') {
+    env.ANTON_OPENAI_API_KEY = key || 'not-needed';
+    env.ANTON_OPENAI_BASE_URL = customBaseUrl.trim();
+    env.ANTON_PLANNING_PROVIDER = 'openai-compatible';
+    env.ANTON_CODING_PROVIDER = 'openai-compatible';
+  } else {
+    env.ANTON_OPENAI_API_KEY = key;
+    env.ANTON_OPENAI_BASE_URL = 'https://api.openai.com/v1';
+    env.ANTON_PLANNING_PROVIDER = 'openai-compatible';
+    env.ANTON_CODING_PROVIDER = 'openai-compatible';
+  }
+  env.ANTON_PLANNING_MODEL = model;
+  env.ANTON_CODING_MODEL = model;
+  return env;
+}
+
 function StageDots({ step }: { step: 1 | 2 }) {
   const dot = (n: 1 | 2): React.CSSProperties => ({
     width: 24, height: 24,
@@ -114,10 +163,13 @@ function StageDots({ step }: { step: 1 | 2 }) {
 export default function OnboardingScreen({
   coworker,
   onComplete,
+  onBack,
 }: {
   /** Cartridge chosen on the select screen; persisted with the settings. */
   coworker: { id: string; label: string; sprite: SpriteName };
   onComplete: () => void;
+  /** Optional — returns to the coworker-select screen. */
+  onBack?: () => void;
 }) {
   const [provider, setProvider] = useState<Provider>('minds');
   const [byokProvider, setByokProvider] = useState<ByokProvider>('anthropic');
@@ -130,6 +182,14 @@ export default function OnboardingScreen({
   const [phase, setPhase] = useState<Phase>('choose');
   const [errorMsg, setErrorMsg] = useState('');
   const [skippedMinds, setSkippedMinds] = useState(false);
+  // Which stage's layout to render. Decoupled from `phase` so the
+  // validating spinner shows in the right place without inferring it
+  // from whether the API-key field happens to be non-empty.
+  const [step, setStep] = useState<'minds' | 'byok'>('minds');
+  // Latches once onboarding finalizes so the web Keycloak auto-finalize
+  // effect (which re-runs on `provider` toggles) can't double-save /
+  // double-fire onComplete.
+  const finalizedRef = useRef(false);
 
   const models = byokProvider === 'anthropic'
     ? ANTHROPIC_MODELS
@@ -171,6 +231,8 @@ export default function OnboardingScreen({
   };
 
   const saveFinal = async (lines: string[]) => {
+    if (finalizedRef.current) return; // guard double-finalize (see finalizedRef)
+    finalizedRef.current = true;
     lines.push('ANTON_MEMORY_MODE=autopilot');
     lines.push('ANTON_EPISODIC_MEMORY=true');
     await host.saveSettings(lines.join('\n'));
@@ -218,18 +280,12 @@ export default function OnboardingScreen({
         await saveFinal(lines);
       } else {
         await host.saveSettings(mindsLines.join('\n'));
+        setStep('byok');
         setPhase('minds-no-llm');
       }
     } else {
-      const validationProvider = byokProvider === 'anthropic' ? 'anthropic' : 'openai-compatible';
-      const validationBaseUrl =
-        byokProvider === 'openai'
-          ? 'https://api.openai.com/v1'
-          : byokProvider === 'gemini'
-            ? GEMINI_BASE_URL
-            : byokProvider === 'openai-compatible'
-              ? customBaseUrl.trim()
-              : undefined;
+      const { provider: validationProvider, baseUrl: validationBaseUrl } =
+        resolveValidationTarget(byokProvider, customBaseUrl);
 
       const result = await host.validateProvider(
         validationProvider,
@@ -244,29 +300,8 @@ export default function OnboardingScreen({
         return;
       }
 
-      const lines: string[] = ['ANTON_TERMS_CONSENT=true'];
-      if (byokProvider === 'anthropic') {
-        lines.push(`ANTON_ANTHROPIC_API_KEY=${apiKey.trim()}`);
-        lines.push('ANTON_PLANNING_PROVIDER=anthropic');
-        lines.push('ANTON_CODING_PROVIDER=anthropic');
-      } else if (byokProvider === 'gemini') {
-        lines.push(`ANTON_OPENAI_API_KEY=${apiKey.trim()}`);
-        lines.push(`ANTON_OPENAI_BASE_URL=${GEMINI_BASE_URL}`);
-        lines.push('ANTON_PLANNING_PROVIDER=openai-compatible');
-        lines.push('ANTON_CODING_PROVIDER=openai-compatible');
-      } else if (byokProvider === 'openai-compatible') {
-        lines.push(`ANTON_OPENAI_API_KEY=${apiKey.trim() || 'not-needed'}`);
-        lines.push(`ANTON_OPENAI_BASE_URL=${customBaseUrl.trim()}`);
-        lines.push('ANTON_PLANNING_PROVIDER=openai-compatible');
-        lines.push('ANTON_CODING_PROVIDER=openai-compatible');
-      } else {
-        lines.push(`ANTON_OPENAI_API_KEY=${apiKey.trim()}`);
-        lines.push('ANTON_OPENAI_BASE_URL=https://api.openai.com/v1');
-        lines.push('ANTON_PLANNING_PROVIDER=openai-compatible');
-        lines.push('ANTON_CODING_PROVIDER=openai-compatible');
-      }
-      lines.push(`ANTON_PLANNING_MODEL=${resolvedModel}`);
-      lines.push(`ANTON_CODING_MODEL=${resolvedModel}`);
+      const env = buildProviderEnv(byokProvider, apiKey.trim(), customBaseUrl, resolvedModel);
+      const lines = ['ANTON_TERMS_CONSENT=true', ...Object.entries(env).map(([k, v]) => `${k}=${v}`)];
       await saveFinal(lines);
     }
   };
@@ -275,15 +310,8 @@ export default function OnboardingScreen({
     setPhase('validating');
     setErrorMsg('');
 
-    const validationProvider = byokProvider === 'anthropic' ? 'anthropic' : 'openai-compatible';
-    const validationBaseUrl =
-      byokProvider === 'openai'
-        ? 'https://api.openai.com/v1'
-        : byokProvider === 'gemini'
-          ? GEMINI_BASE_URL
-          : byokProvider === 'openai-compatible'
-            ? customBaseUrl.trim()
-            : undefined;
+    const { provider: validationProvider, baseUrl: validationBaseUrl } =
+      resolveValidationTarget(byokProvider, customBaseUrl);
     const key = llmApiKey.trim() || (byokProvider === 'openai-compatible' ? 'not-needed' : '');
 
     const result = await host.validateProvider(
@@ -299,34 +327,18 @@ export default function OnboardingScreen({
       return;
     }
 
+    // Merge the new LLM vars onto the existing settings (the MindsHub
+    // keys saved in Stage 1 stay intact for publishing/connectors).
     const existing = await host.readSettings();
-    const merged = { ...existing };
-
-    if (byokProvider === 'anthropic') {
-      merged.ANTON_ANTHROPIC_API_KEY = llmApiKey.trim();
-      merged.ANTON_PLANNING_PROVIDER = 'anthropic';
-      merged.ANTON_CODING_PROVIDER = 'anthropic';
-    } else if (byokProvider === 'gemini') {
-      merged.ANTON_OPENAI_API_KEY = llmApiKey.trim();
-      merged.ANTON_OPENAI_BASE_URL = GEMINI_BASE_URL;
-      merged.ANTON_PLANNING_PROVIDER = 'openai-compatible';
-      merged.ANTON_CODING_PROVIDER = 'openai-compatible';
-    } else if (byokProvider === 'openai-compatible') {
-      merged.ANTON_OPENAI_API_KEY = key;
-      merged.ANTON_OPENAI_BASE_URL = customBaseUrl.trim();
-      merged.ANTON_PLANNING_PROVIDER = 'openai-compatible';
-      merged.ANTON_CODING_PROVIDER = 'openai-compatible';
-    } else {
-      merged.ANTON_OPENAI_API_KEY = llmApiKey.trim();
-      merged.ANTON_OPENAI_BASE_URL = 'https://api.openai.com/v1';
-      merged.ANTON_PLANNING_PROVIDER = 'openai-compatible';
-      merged.ANTON_CODING_PROVIDER = 'openai-compatible';
-    }
-    merged.ANTON_PLANNING_MODEL = resolvedModel;
-    merged.ANTON_CODING_MODEL = resolvedModel;
+    const merged: Record<string, string> = {
+      ...existing,
+      ...buildProviderEnv(byokProvider, key, customBaseUrl, resolvedModel),
+    };
     merged.ANTON_MEMORY_MODE = merged.ANTON_MEMORY_MODE || 'autopilot';
     merged.ANTON_EPISODIC_MEMORY = merged.ANTON_EPISODIC_MEMORY || 'true';
 
+    if (finalizedRef.current) return;
+    finalizedRef.current = true;
     const lines = Object.entries(merged).map(([k, v]) => `${k}=${v}`);
     await host.saveSettings(lines.join('\n'));
     await syncToBackend(lines);
@@ -375,9 +387,10 @@ export default function OnboardingScreen({
   useEffect(() => {
     if (!host.isWeb) return;
     if (provider !== 'minds') return;
+    if (finalizedRef.current) return; // already completed — don't re-finalize
     let cancelled = false;
     import('../../lib/keycloak').then(({ keycloak }) => {
-      if (cancelled || !keycloak.authenticated) return;
+      if (cancelled || finalizedRef.current || !keycloak.authenticated) return;
       saveFinal([
         'ANTON_TERMS_CONSENT=true',
         'ANTON_MINDS_ENABLED=true',
@@ -420,9 +433,8 @@ export default function OnboardingScreen({
   );
 
   // ── Stage 2: bring-your-own key ────────────────────────────────────
-  if (phase === 'minds-no-llm'
-      || (phase === 'validating' && provider === 'byok')
-      || (phase === 'validating' && provider === 'minds' && apiKey)) {
+  // Driven by the explicit `step`, not by inferring from form contents.
+  if (step === 'byok' && (phase === 'minds-no-llm' || phase === 'validating')) {
     const showLlmForm = phase === 'minds-no-llm';
     return (
       <ArcadeShell title="POWER UP" subtitle={`choose a power source for ${coworker.label.toLowerCase()}`}>
@@ -445,6 +457,7 @@ export default function OnboardingScreen({
                 style={{ alignSelf: 'flex-start' }}
                 onClick={() => {
                   setProvider('minds');
+                  setStep('minds');
                   setPhase('choose');
                   setSkippedMinds(false);
                   setErrorMsg('');
@@ -654,12 +667,19 @@ export default function OnboardingScreen({
             className="arc-link"
             onClick={() => {
               setProvider('byok');
+              setStep('byok');
               setApiKey('');
               setErrorMsg('');
               setSkippedMinds(true);
               setPhase('minds-no-llm');
             }}
           >GUEST MODE → bring my own LLM key</button>
+        )}
+
+        {onBack && phase !== 'validating' && (
+          <button type="button" className="arc-link" onClick={onBack} style={{ marginTop: 2 }}>
+            ← change coworker
+          </button>
         )}
       </div>
     </ArcadeShell>

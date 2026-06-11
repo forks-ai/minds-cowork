@@ -2,7 +2,7 @@
 // documents one click away, explicit checkbox, same consent sentence —
 // only the framing changed (a retro "license agreement" dialog).
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArcadeShell } from './components';
 import { PixelSprite } from './sprites';
@@ -10,31 +10,77 @@ import { TERMS_TEXT, PRIVACY_TEXT } from './legalText';
 
 type View = 'main' | 'terms' | 'privacy';
 
+/**
+ * Accessible modal for the full legal documents. Owns its own focus
+ * management (focus in on open, trap Tab within the dialog, Escape to
+ * close, restore focus to the trigger on close) so the consent screen
+ * stays simple and rule-of-hooks-safe.
+ */
+function LegalViewer({ doc, onClose }: { doc: 'terms' | 'privacy'; onClose: () => void }) {
+  const isTerms = doc === 'terms';
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const backBtnRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const prevFocus = document.activeElement as HTMLElement | null;
+    backBtnRef.current?.focus();
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
+      if (e.key !== 'Tab') return;
+      // Trap Tab within the dialog's focusable elements.
+      const focusables = dialogRef.current?.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      );
+      if (!focusables || focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && active === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus(); }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      prevFocus?.focus?.();
+    };
+  }, [onClose]);
+
+  // Portaled to <body> so it floats above the titlebar drag overlay.
+  return createPortal(
+    <div className="arc-legal-overlay" onClick={onClose}>
+      <div
+        className="arc-legal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={isTerms ? 'Terms of Service' : 'Privacy Policy'}
+        ref={dialogRef}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="arc-legal-head">
+          <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.18em', color: 'var(--arc-cyan, #3dd6f5)' }}>
+            {isTerms ? 'TERMS OF SERVICE' : 'PRIVACY POLICY'}
+          </span>
+          <button type="button" className="arc-btn-ghost" onClick={onClose} ref={backBtnRef}>
+            ← BACK
+          </button>
+        </div>
+        <div className="arc-legal-body">
+          <pre>{isTerms ? TERMS_TEXT : PRIVACY_TEXT}</pre>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 export default function TermsScreen({ onAccept }: { onAccept: () => void }) {
   const [view, setView] = useState<View>('main');
   const [accepted, setAccepted] = useState(false);
 
   if (view === 'terms' || view === 'privacy') {
-    const isTerms = view === 'terms';
-    // Portaled to <body> so it floats above the titlebar drag overlay.
-    return createPortal(
-      <div className="arc-legal-overlay">
-        <div className="arc-legal">
-          <div className="arc-legal-head">
-            <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.18em', color: 'var(--arc-cyan, #3dd6f5)' }}>
-              {isTerms ? 'TERMS OF SERVICE' : 'PRIVACY POLICY'}
-            </span>
-            <button type="button" className="arc-btn-ghost" onClick={() => setView('main')}>
-              ← BACK
-            </button>
-          </div>
-          <div className="arc-legal-body">
-            <pre>{isTerms ? TERMS_TEXT : PRIVACY_TEXT}</pre>
-          </div>
-        </div>
-      </div>,
-      document.body,
-    );
+    return <LegalViewer doc={view} onClose={() => setView('main')} />;
   }
 
   return (

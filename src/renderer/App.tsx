@@ -72,6 +72,10 @@ function devForcedPage(): Page | null {
 export default function App() {
   const [page, setPage] = useState<Page>('loading');
   const [coworker, setCoworker] = useState(recallCoworker);
+  // When inspecting a single screen via `?page=`, freeze it: the
+  // onboarding/launch screens auto-advance on completion, which would
+  // navigate away from the very screen you're trying to look at.
+  const isDevFrozen = Boolean(devForcedPage());
 
   useEffect(() => {
     const forced = devForcedPage();
@@ -193,10 +197,17 @@ export default function App() {
       {page === 'setup' && <SetupScreen onComplete={handleInstallComplete} />}
       {page === 'coworker' && <CoworkerSelect onSelect={handleCoworkerSelected} />}
       {page === 'onboarding' && (
-        <OnboardingScreen coworker={coworker} onComplete={handleOnboardingComplete} />
+        <OnboardingScreen
+          coworker={coworker}
+          onComplete={isDevFrozen ? () => {} : handleOnboardingComplete}
+          onBack={() => setPage('coworker')}
+        />
       )}
       {page === 'launching' && (
-        <LaunchScreen coworkerLabel={coworker.label} onDone={() => setPage('terminal')} />
+        <LaunchScreen
+          coworkerLabel={coworker.label}
+          onDone={isDevFrozen ? () => {} : () => setPage('terminal')}
+        />
       )}
 
       {page === 'terminal' && <CoworkApp />}
