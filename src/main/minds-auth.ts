@@ -547,7 +547,14 @@ const MINDS_KEYS = [
 // live MindsHub gateway now expects the `latest:*` alias namespace;
 // the older deprecated sentinel aliases 500 with "Mind not found".
 export async function writeMindsKeyToEnvAndRestart(apiKey: string): Promise<void> {
-  const envPath = path.join(os.homedir(), '.anton', '.env');
+  const antonDir = path.join(os.homedir(), '.anton');
+  // ~/.anton normally exists by the time SSO finalize runs (the server
+  // creates it on boot), but if the server failed to start the finalize
+  // write would ENOENT and the user's freshly-minted key is lost.
+  if (!fs.existsSync(antonDir)) {
+    fs.mkdirSync(antonDir, { recursive: true });
+  }
+  const envPath = path.join(antonDir, '.env');
   const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
   const lines = existing.split('\n')
     .filter(l => !MINDS_KEYS.some(k => l.startsWith(k + '=')));
