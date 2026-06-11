@@ -89,10 +89,12 @@ jobs:
         run: |
           python3 -c "
           import os, re
-          path = 'server/routes/integrations.py'
+          path = 'src/main/server-process.ts'
           content = open(path).read()
-          content = re.sub(r'os\.environ\.get\(\"GOOGLE_CLIENT_ID\",\s*\"\"\)', repr(os.environ['GOOGLE_CLIENT_ID']), content)
-          content = re.sub(r'os\.environ\.get\(\"GOOGLE_CLIENT_SECRET\",\s*\"\"\)', repr(os.environ['GOOGLE_CLIENT_SECRET']), content)
+          # Inject credentials into the env object passed to the cowork-server spawn
+          old = '      COWORK_SERVER_HOST: SERVER_HOST,'
+          new = old + '\n      GOOGLE_CLIENT_ID: ' + repr(os.environ['GOOGLE_CLIENT_ID']) + ',' + '\n      GOOGLE_CLIENT_SECRET: ' + repr(os.environ['GOOGLE_CLIENT_SECRET']) + ','
+          content = content.replace(old, new, 1)
           open(path, 'w').write(content)
           "
 
