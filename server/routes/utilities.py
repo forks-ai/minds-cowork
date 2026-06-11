@@ -704,6 +704,8 @@ def _resolve_publish_target(artifact: Path) -> tuple[Path, Path, str, bool]:
     `_published_url_for` / `list_artifacts` read it back.
 
     Returns (publish_target, published_dir, published_key, is_fullstack).
+    Raises 422 for a non-fullstack folder with no user files yet — there
+    is nothing to publish (and nothing could have been published).
     """
     if artifact.is_dir():
         # Folder addressed directly — its primary file lives inside.
@@ -721,7 +723,10 @@ def _resolve_publish_target(artifact: Path) -> tuple[Path, Path, str, bool]:
         return artifact_root, artifact_root, key, True
     if primary:
         return primary, primary.parent, primary.name, False
-    return artifact_root, artifact_root, "index.html", False
+    raise HTTPException(
+        status_code=422,
+        detail="Artifact has no publishable files yet",
+    )
 
 
 def _html_artifacts() -> list[dict[str, Any]]:
