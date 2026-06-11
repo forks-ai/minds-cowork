@@ -894,6 +894,19 @@ let _lastFetchedSettings = {};
 // updateSettings can't race on _lastFetchedSettings.
 let _settingsLock = Promise.resolve();
 
+// Per-provider model picker options + recommended (planning, coding) pair,
+// owned by the backend (cowork-server). For minds-cloud the list is the live
+// MindsHub `/v1/models` set. Returns null on failure so callers fall back to
+// whatever static seed they already have. Model names are NOT maintained in
+// this repo — this is the single source.
+export async function fetchRecommendedModels() {
+  try {
+    return await req('/settings/recommended-models');
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchSettings() {
   const op = _settingsLock.then(async () => {
     try {
@@ -908,15 +921,13 @@ export async function fetchSettings() {
       // Overlay the server's recommended-models (MindsHub's live `/v1/models`
       // list for minds-cloud). Falls back to the static lists seeded by
       // transformSettingsRows when the endpoint is absent or unreachable.
-      try {
-        const rec = await req('/settings/recommended-models');
-        if (rec?.recommendedModels) {
-          result.recommendedModels = { ...result.recommendedModels, ...rec.recommendedModels };
-        }
-        if (rec?.recommendedPair) {
-          result.recommendedPair = { ...result.recommendedPair, ...rec.recommendedPair };
-        }
-      } catch { /* keep static fallback */ }
+      const rec = await fetchRecommendedModels();
+      if (rec?.recommendedModels) {
+        result.recommendedModels = { ...result.recommendedModels, ...rec.recommendedModels };
+      }
+      if (rec?.recommendedPair) {
+        result.recommendedPair = { ...result.recommendedPair, ...rec.recommendedPair };
+      }
       _lastFetchedSettings = result;
       return result;
     } catch {

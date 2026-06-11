@@ -83,22 +83,11 @@ export function providerTypeToServerValue(value) {
 // SettingsView both import from here. Each entry carries the model ID
 // and a human-readable label for dropdowns.
 export const PROVIDER_MODELS = {
-  // MindsHub's `latest:*` alias namespace. This is the offline fallback;
-  // the live list is fetched from the server's `/settings/recommended-models`
-  // (MindsHub `/v1/models`) and overlaid in fetchSettings(). The deprecated
-  // MindsHub sentinel aliases are intentionally not listed.
-  'minds-cloud': [
-    { id: 'latest:sonnet', label: 'Sonnet (latest)' },
-    { id: 'latest:opus', label: 'Opus (latest)' },
-    { id: 'latest:haiku', label: 'Haiku (latest)' },
-    { id: 'latest:gpt', label: 'GPT (latest)' },
-    { id: 'latest:gpt-codex', label: 'GPT Codex (latest)' },
-    { id: 'latest:gemini', label: 'Gemini (latest)' },
-    { id: 'latest:gemini-flash', label: 'Gemini Flash (latest)' },
-    { id: 'latest:kimi', label: 'Kimi (latest)' },
-    { id: 'latest:deepseek', label: 'DeepSeek (latest)' },
-    { id: 'latest:qwen', label: 'Qwen (latest)' },
-  ],
+  // MindsHub model names are owned by the backend, not this repo. The list
+  // is supplied at runtime by `/settings/recommended-models` (the live
+  // MindsHub `/v1/models` set) and overlaid in fetchSettings(). Left empty
+  // so no model names are maintained here.
+  'minds-cloud': [],
   anthropic: [
     { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
     { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
@@ -133,7 +122,8 @@ export const STATIC_SETTINGS = {
     Object.entries(PROVIDER_MODELS).map(([k, v]) => [k, v.map((m) => m.id)]),
   ),
   recommendedPair: {
-    'minds-cloud': ['latest:sonnet', 'latest:haiku'],
+    // minds-cloud defaults come from the backend (recommendedPair) at runtime.
+    'minds-cloud': ['', ''],
     anthropic: ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
     openai: ['gpt-5.4', 'gpt-5.4-mini'],
     gemini: ['gemini-2.5-pro', 'gemini-2.5-flash'],

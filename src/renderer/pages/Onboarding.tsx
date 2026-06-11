@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { host } from '../platform/host';
-import { BASE } from '../cowork/api';
+import { BASE, fetchRecommendedModels } from '../cowork/api';
 import { PROVIDER_MODELS } from '../cowork/lib/settingsTransform';
 import OrbitMorph from '../cowork/components/ui/OrbitMorph';
 
@@ -33,6 +33,27 @@ const ENV_TO_SETTING: Record<string, string> = {
   ANTON_MEMORY_MODE: 'memory_mode',
   ANTON_EPISODIC_MEMORY: 'episodic_memory',
 };
+
+// Last-resort MindsHub model, used only if the backend returns nothing. We
+// avoid maintaining model names in this repo, but a single safe fallback is
+// worth it: the alternative is the validator's ancient `gpt-4o` default, which
+// MindsHub does not serve. `latest:*` is a stable alias, not a pinned version,
+// so it won't drift. The backend's own default (apply_model_defaults) is the
+// real source — this only guards a failed `/recommended-models` fetch.
+const FALLBACK_MINDS_MODEL = 'latest:sonnet';
+
+/**
+ * The model to probe MindsHub LLM availability with, sourced from the
+ * backend's recommended minds-cloud (planning, coding) pair. Returns the
+ * coding model, falling back to planning, then to FALLBACK_MINDS_MODEL if the
+ * backend is unreachable — never undefined, so the probe never degrades to
+ * the validator's `gpt-4o` default.
+ */
+async function mindsProbeModel(): Promise<string> {
+  const rec = await fetchRecommendedModels();
+  const pair = rec?.recommendedPair?.['minds-cloud'];
+  return pair?.[1] || pair?.[0] || FALLBACK_MINDS_MODEL;
+}
 
 /** Push onboarding settings to the cowork-server backend DB. */
 async function syncToBackend(lines: string[]): Promise<void> {
@@ -194,16 +215,20 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
         `ANTON_MINDS_URL=${mindsBase}`,
       ];
 
-      // Step 3: Test if LLM credits are available
+      // Step 3: Test if LLM credits are available. The probe model is the
+      // backend's recommended minds-cloud coding model — fetched, never
+      // hardcoded here, so model names live only in cowork-server.
       const llmResult = await host.validateProvider(
         'openai-compatible',
         apiKey.trim(),
         `${mindsBase}/v1`,
-        'latest:haiku'
+        await mindsProbeModel()
       );
 
       if (llmResult.ok) {
-        // Full Minds setup — LLM works.
+        // Full Minds setup — LLM works. Set only the provider; the backend
+        // resolves the default planning/coding model on load and reports it
+        // back to the UI (apply_model_defaults), so we never write model names.
         // Do NOT copy the Minds key into ANTON_OPENAI_API_KEY — the server
         // reads minds_api_key for the minds_cloud provider. Duplicating it
         // into the OpenAI slot causes a phantom OpenAI card in Settings.
@@ -211,10 +236,6 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
           ...mindsLines,
           'ANTON_PLANNING_PROVIDER=minds-cloud',
           'ANTON_CODING_PROVIDER=minds-cloud',
-          // MindsHub `latest:*` aliases — mirrors RECOMMENDED_PAIR['minds-cloud'].
-          // The deprecated MindsHub sentinel aliases are hidden from /v1/models.
-          'ANTON_PLANNING_MODEL=latest:sonnet',
-          'ANTON_CODING_MODEL=latest:haiku',
         ];
         await saveFinal(lines);
       } else {
@@ -350,14 +371,13 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
     let cancelled = false;
     import('../lib/keycloak').then(({ keycloak }) => {
       if (cancelled || !keycloak.authenticated) return;
+      // Provider only — the backend resolves the default model on load.
       saveFinal([
         'ANTON_TERMS_CONSENT=true',
         'ANTON_MINDS_ENABLED=true',
         'ANTON_MINDS_URL=https://api.mindshub.ai',
         'ANTON_PLANNING_PROVIDER=minds-cloud',
         'ANTON_CODING_PROVIDER=minds-cloud',
-        'ANTON_PLANNING_MODEL=latest:sonnet',
-        'ANTON_CODING_MODEL=latest:haiku',
       ]);
     });
     return () => { cancelled = true; };
@@ -403,14 +423,13 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
     // API key is now written to env by mindshubFinalize; include it in
     // saveFinal so syncToBackend writes it to the DB as well (the DB is
     // authoritative for cowork-server — .env alone isn't enough).
+    // Provider only — the backend resolves the default model on load.
     const lines = [
       'ANTON_TERMS_CONSENT=true',
       'ANTON_MINDS_ENABLED=true',
       'ANTON_MINDS_URL=https://api.mindshub.ai',
       'ANTON_PLANNING_PROVIDER=minds-cloud',
       'ANTON_CODING_PROVIDER=minds-cloud',
-      'ANTON_PLANNING_MODEL=latest:sonnet',
-      'ANTON_CODING_MODEL=latest:haiku',
     ];
     if (finalizeResult.apiKey) {
       lines.push(`ANTON_MINDS_API_KEY=${finalizeResult.apiKey}`);

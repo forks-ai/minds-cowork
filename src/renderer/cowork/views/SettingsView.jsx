@@ -30,12 +30,9 @@ const PROVIDER_DEFAULTS = {
   openai:              { planning: 'gpt-5.4',           coding: 'gpt-5.4-mini' },
   gemini:              { planning: 'gemini-2.5-pro',    coding: 'gemini-2.5-flash' },
   'openai-compatible': { planning: '',                  coding: '' },
-  // Minds Cloud is MindsHub's `latest:*` alias namespace. The router
-  // dispatches each alias to the actual upstream provider; the
-  // (planning, coding) pair here mirrors `RECOMMENDED_PAIR['minds-cloud']`
-  // on the server so switching to this preset auto-fills the same defaults
-  // the backend would recommend.
-  'minds-cloud':       { planning: 'latest:sonnet',     coding: 'latest:haiku' },
+  // No minds-cloud entry: MindsHub model names are owned by the backend.
+  // applyProviderPreset reads settings.recommendedPair['minds-cloud']
+  // (from /settings/recommended-models) so nothing is maintained here.
 };
 
 // Known model lists per provider — surfaced as quick-pick chips below
@@ -172,9 +169,14 @@ function applyProviderPreset(preset, settings, setSetting) {
 
   // 2. Reset planning + coding models to the new provider's defaults so
   //    the user never lands on a "claude-sonnet-4-6 on OpenAI" mismatch.
-  //    For providers without sensible defaults (compatible, minds-cloud)
-  //    we clear the fields rather than leaving stale Claude/GPT names.
-  const defaults = PROVIDER_DEFAULTS[preset] || { planning: '', coding: '' };
+  //    The backend's recommendedPair (from /settings/recommended-models) is
+  //    authoritative — used for minds-cloud, whose names live only on the
+  //    server. PROVIDER_DEFAULTS is the fallback for the direct BYOK
+  //    providers; for those without a default we clear the fields.
+  const recPair = settings.recommendedPair?.[preset];
+  const defaults = recPair
+    ? { planning: recPair[0] || '', coding: recPair[1] || '' }
+    : (PROVIDER_DEFAULTS[preset] || { planning: '', coding: '' });
   setSetting('planningModel', defaults.planning);
   setSetting('defaultModel', defaults.planning);
   setSetting('codingModel', defaults.coding);
@@ -1672,7 +1674,7 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
                           setSetting('planningModel', v);
                           setSetting('defaultModel', v);
                         }}
-                        placeholder={PROVIDER_DEFAULTS[activePreset]?.planning || 'model-id'}
+                        placeholder={recommendedPair[activePreset]?.[0] || PROVIDER_DEFAULTS[activePreset]?.planning || 'model-id'}
                       />
                       <ChipRow
                         items={quickPicks}
@@ -1684,7 +1686,7 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
                       <TextInput
                         value={settings.codingModel ?? ''}
                         onChange={(v) => setSetting('codingModel', v)}
-                        placeholder={PROVIDER_DEFAULTS[activePreset]?.coding || 'model-id'}
+                        placeholder={recommendedPair[activePreset]?.[1] || PROVIDER_DEFAULTS[activePreset]?.coding || 'model-id'}
                       />
                       <ChipRow
                         items={quickPicks}
