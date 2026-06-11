@@ -5,10 +5,10 @@ import App from './App';
 // outranks them on shared selectors. Used by ported components
 // (Markdown stack, ThinkingBlock) that ship in utility classes.
 import './cowork/styles/tailwind.css';
-// Load cowork's token system + button classes globally so the onboarding
-// screens (TermsConsent, Setup, Onboarding) share the same theme tokens
-// as the cowork app. Antontron's own styles.css aliases its legacy var
-// names to the new tokens so existing onboarding classes keep working.
+// Load cowork's token system globally — the arcade onboarding screens
+// rely on it for the bundled fonts (JetBrains Mono) and the terminal
+// page for its theme tokens. Antontron's own styles.css aliases its
+// legacy var names to the new tokens.
 import './cowork/styles/globals.css';
 import './styles.css';
 

@@ -1,0 +1,96 @@
+// Terms consent, arcade edition. Same legal gate as before — full
+// documents one click away, explicit checkbox, same consent sentence —
+// only the framing changed (a retro "license agreement" dialog).
+
+import { useState } from 'react';
+import { createPortal } from 'react-dom';
+import { ArcadeShell } from './components';
+import { PixelSprite } from './sprites';
+import { TERMS_TEXT, PRIVACY_TEXT } from './legalText';
+
+type View = 'main' | 'terms' | 'privacy';
+
+export default function TermsScreen({ onAccept }: { onAccept: () => void }) {
+  const [view, setView] = useState<View>('main');
+  const [accepted, setAccepted] = useState(false);
+
+  if (view === 'terms' || view === 'privacy') {
+    const isTerms = view === 'terms';
+    // Portaled to <body> so it floats above the titlebar drag overlay.
+    return createPortal(
+      <div className="arc-legal-overlay">
+        <div className="arc-legal">
+          <div className="arc-legal-head">
+            <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: '0.18em', color: 'var(--arc-cyan, #3dd6f5)' }}>
+              {isTerms ? 'TERMS OF SERVICE' : 'PRIVACY POLICY'}
+            </span>
+            <button type="button" className="arc-btn-ghost" onClick={() => setView('main')}>
+              ← BACK
+            </button>
+          </div>
+          <div className="arc-legal-body">
+            <pre>{isTerms ? TERMS_TEXT : PRIVACY_TEXT}</pre>
+          </div>
+        </div>
+      </div>,
+      document.body,
+    );
+  }
+
+  return (
+    <ArcadeShell title="LICENSE AGREEMENT" subtitle="every quest begins with a scroll">
+      <div className="arc-stack arc-fade-in" style={{ gap: 26, width: 'min(560px, 100%)' }}>
+        <PixelSprite name="scroll" size={64} title="License scroll" />
+
+        <div style={{ fontSize: 12.5, lineHeight: 1.7, letterSpacing: '0.04em', color: 'var(--arc-muted)', textAlign: 'center', maxWidth: 440 }}>
+          Before we get started, please review and accept our policies.
+        </div>
+
+        <div className="arc-panel" style={{ width: '100%', boxSizing: 'border-box', padding: '18px 22px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button type="button" className="arc-btn-ghost" style={{ flex: 1, minWidth: 180 }} onClick={() => setView('terms')}>
+              → READ TERMS OF SERVICE
+            </button>
+            <button type="button" className="arc-btn-ghost" style={{ flex: 1, minWidth: 180 }} onClick={() => setView('privacy')}>
+              → READ PRIVACY POLICY
+            </button>
+          </div>
+
+          {/* Not a <label>: the consent text embeds the Terms/Privacy
+              link buttons, and nested interactive elements make native
+              label→checkbox forwarding unreliable. The row itself
+              toggles via onClick; the links stopPropagation. */}
+          <div
+            className="arc-check"
+            onClick={() => setAccepted((a) => !a)}
+          >
+            <input
+              type="checkbox"
+              checked={accepted}
+              onChange={(e) => setAccepted(e.target.checked)}
+              onClick={(e) => e.stopPropagation()}
+              aria-label="I have read and agree with the MindsDB Terms of Service and Privacy Policy"
+            />
+            <span className="arc-check-box" aria-hidden>{accepted ? '✓' : ''}</span>
+            <span className="arc-check-text">
+              I have read and agree with MindsDB{' '}
+              <button type="button" className="arc-link" onClick={(e) => { e.stopPropagation(); setView('terms'); }}>Terms of Service</button>
+              {' '}and{' '}
+              <button type="button" className="arc-link" onClick={(e) => { e.stopPropagation(); setView('privacy'); }}>Privacy Policy</button>.
+              {' '}I understand that by checking this box, I am providing my consent to be bound by these terms.
+            </span>
+          </div>
+        </div>
+
+        <button className="arc-btn arc-btn-green" disabled={!accepted} onClick={onAccept}>
+          ACCEPT &amp; CONTINUE ▶
+        </button>
+
+        <div style={{ fontSize: 10.5, letterSpacing: '0.06em', color: 'var(--arc-dim)', textAlign: 'center', lineHeight: 1.6 }}>
+          Next we&rsquo;ll install the system dependencies Minds Cowork needs.
+          <br />Takes about a minute.
+        </div>
+      </div>
+    </ArcadeShell>
+  );
+}

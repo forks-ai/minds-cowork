@@ -1,9 +1,8 @@
-import { useState } from 'react';
-import { createPortal } from 'react-dom';
+// Full legal documents shown during onboarding. Extracted verbatim
+// from the previous TermsConsent screen so the arcade redesign changes
+// presentation only, never the legal content.
 
-type View = 'main' | 'terms' | 'privacy';
-
-const TERMS_TEXT = `Terms of Service
+export const TERMS_TEXT = `Terms of Service
 Last updated: May 28, 2026
 
 Welcome, and thank you for your interest in MindsDB, Inc. (“MindsDB,” “we,” or “us”). These Terms of Service (the “Terms”) are a legally binding contract between you and MindsDB governing your access to and use of:
@@ -99,7 +98,7 @@ MindsDB
 San Jose, CA 95148
 USA`;
 
-const PRIVACY_TEXT = `MindsDB Privacy Notice
+export const PRIVACY_TEXT = `MindsDB Privacy Notice
 Effective date: September 4, 2025
 Last updated: September 4, 2025
 
@@ -244,93 +243,3 @@ MindsDB
 Legal address: 3277 S White Rd PMB 10166, San Jose, CA 95148, USA
 Data Protection Officer: Adam Carrigan \u2013 hello@mindsdb.com
 For privacy requests, email hello@mindsdb.com and include Privacy Request in the subject line.`;
-
-export default function TermsConsent({ onAccept }: { onAccept: () => void }) {
-  const [view, setView] = useState<View>('main');
-  const [accepted, setAccepted] = useState(false);
-
-  // ── Inline document viewer ──
-  if (view === 'terms' || view === 'privacy') {
-    const isTerms = view === 'terms';
-    // Portaled to <body> so the ANTON header up the tree can't bleed
-    // through. Overlay sits above titlebar-drag (z 1000) and has its
-    // own draggable header so window dragging still works.
-    return createPortal(
-      <div className="legal-viewer-overlay">
-        <div className="legal-viewer">
-          <div className="legal-viewer-header">
-            <span className="legal-viewer-title">
-              {isTerms ? 'Terms of Service' : 'Privacy Policy'}
-            </span>
-          </div>
-          <div className="legal-viewer-body">
-            <pre className="legal-text">{isTerms ? TERMS_TEXT : PRIVACY_TEXT}</pre>
-          </div>
-          {/* Floating back button \u2014 text-only, no fill, no border;
-              fixed to the bottom-right of the viewport so the user
-              can dismiss the document without having to scroll back
-              to the top. */}
-          <button
-            type="button"
-            className="legal-floating-back"
-            onClick={() => setView('main')}
-          >
-            <span aria-hidden>{'\u2190'}</span>
-            <span>Back</span>
-          </button>
-        </div>
-      </div>,
-      document.body,
-    );
-  }
-
-  // ── Main consent screen ──
-  return (
-    <div className="terms-section">
-        <div className="terms-subtitle">
-          Before we get started, please review and accept our policies.
-        </div>
-
-        <div className="terms-links">
-          <button className="terms-link-btn" onClick={() => setView('terms')}>
-            <span className="terms-link-icon">{'\u2192'}</span>
-            Terms of Service
-          </button>
-          <button className="terms-link-btn" onClick={() => setView('privacy')}>
-            <span className="terms-link-icon">{'\u2192'}</span>
-            Privacy Policy
-          </button>
-        </div>
-
-        <label className="terms-checkbox-label">
-          <input
-            type="checkbox"
-            className="terms-checkbox"
-            checked={accepted}
-            onChange={(e) => setAccepted(e.target.checked)}
-          />
-          <span className="terms-checkbox-text">
-            I have read and agree with MindsDB{' '}
-            <button className="terms-inline-link" onClick={() => setView('terms')}>Terms of Service</button>
-            {' '}and{' '}
-            <button className="terms-inline-link" onClick={() => setView('privacy')}>Privacy Policy</button>.
-            {' '}I understand that by checking this box, I am providing my consent to be bound by these terms.
-          </span>
-        </label>
-
-        <button
-          className="btn-primary"
-          disabled={!accepted}
-          onClick={onAccept}
-        >
-          GET STARTED
-        </button>
-        {/* Short explainer beneath the CTA — reassures the user that
-            this is just an install, not a credential dance. */}
-        <p className="terms-setup-note">
-          We&rsquo;ll install and prepare the system dependencies Minds Cowork needs.
-          Takes about a minute.
-        </p>
-    </div>
-  );
-}
