@@ -95,8 +95,8 @@ export const PROVIDER_MODELS = {
     { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
   ],
   openai: [
-    { id: 'gpt-5.4', label: 'GPT-5.4' },
-    { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
+    { id: 'gpt-5.5', label: 'GPT-5.5' },
+    { id: 'gpt-5.5-mini', label: 'GPT-5.5 Mini' },
     { id: 'o3', label: 'o3' },
     { id: 'o4-mini', label: 'o4 Mini' },
   ],
@@ -125,7 +125,7 @@ export const STATIC_SETTINGS = {
     // minds-cloud defaults come from the backend (recommendedPair) at runtime.
     'minds-cloud': ['', ''],
     anthropic: ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-    openai: ['gpt-5.4', 'gpt-5.4-mini'],
+    openai: ['gpt-5.5', 'gpt-5.5-mini'],
     gemini: ['gemini-2.5-pro', 'gemini-2.5-flash'],
     'openai-compatible': ['', ''],
   },

@@ -27,7 +27,7 @@ const PROVIDER_PRESETS = [
 // on the deployment).
 const PROVIDER_DEFAULTS = {
   anthropic:           { planning: 'claude-sonnet-4-6', coding: 'claude-haiku-4-5-20251001' },
-  openai:              { planning: 'gpt-5.4',           coding: 'gpt-5.4-mini' },
+  openai:              { planning: 'gpt-5.5',           coding: 'gpt-5.5-mini' },
   gemini:              { planning: 'gemini-2.5-pro',    coding: 'gemini-2.5-flash' },
   'openai-compatible': { planning: '',                  coding: '' },
   // No minds-cloud entry: MindsHub model names are owned by the backend.
@@ -39,7 +39,7 @@ const PROVIDER_DEFAULTS = {
 // the text input so users can swap models without typing.
 const PROVIDER_MODELS = {
   anthropic:     ['claude-sonnet-4-6', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'],
-  openai:        ['gpt-5.4', 'gpt-5.4-mini', 'o3', 'o4-mini'],
+  openai:        ['gpt-5.5', 'gpt-5.5-mini', 'o3', 'o4-mini'],
   gemini:        ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-3-flash-preview'],
   // Minds Cloud quick-picks come from the server's `recommendedModels`
   // bucket (the full `latest:*` alias list) — rendered by the dedicated

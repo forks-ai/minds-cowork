@@ -36,18 +36,18 @@ const ENV_TO_SETTING: Record<string, string> = {
 
 // Last-resort MindsHub model, used only if the backend returns nothing. We
 // avoid maintaining model names in this repo, but a single safe fallback is
-// worth it: the alternative is the validator's ancient `gpt-4o` default, which
-// MindsHub does not serve. `latest:*` is a stable alias, not a pinned version,
-// so it won't drift. The backend's own default (apply_model_defaults) is the
-// real source — this only guards a failed `/recommended-models` fetch.
+// worth it: the validator's generic openai-compatible default is not served
+// by MindsHub. `latest:*` is a stable alias, not a pinned version, so it
+// won't drift. The backend's own default (apply_model_defaults) is the real
+// source — this only guards a failed `/recommended-models` fetch.
 const FALLBACK_MINDS_MODEL = 'latest:sonnet';
 
 /**
  * The model to probe MindsHub LLM availability with, sourced from the
  * backend's recommended minds-cloud (planning, coding) pair. Returns the
  * coding model, falling back to planning, then to FALLBACK_MINDS_MODEL if the
- * backend is unreachable — never undefined, so the probe never degrades to
- * the validator's `gpt-4o` default.
+ * backend is unreachable — never undefined, so the probe always sends a
+ * MindsHub-served model rather than the validator's generic default.
  */
 async function mindsProbeModel(): Promise<string> {
   const rec = await fetchRecommendedModels();

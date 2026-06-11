@@ -20,8 +20,8 @@ export const ANTHROPIC_MODELS: ModelOption[] = [
 ];
 
 export const OPENAI_MODELS: ModelOption[] = [
-  { id: 'gpt-5.4', label: 'GPT-5.4' },
-  { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
+  { id: 'gpt-5.5', label: 'GPT-5.5' },
+  { id: 'gpt-5.5-mini', label: 'GPT-5.5 Mini' },
   { id: 'o3', label: 'o3' },
   { id: 'o4-mini', label: 'o4 Mini' },
 ];
