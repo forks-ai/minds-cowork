@@ -449,7 +449,7 @@ export async function mindshubRefresh(): Promise<{ ok: boolean; reason?: string;
   return { ok: false, reason: 'MindsHub refresh bridge is Electron-only.' };
 }
 
-export async function mindshubFinalize(): Promise<{ ok: boolean; reason?: string; upgradeRequired?: boolean }> {
+export async function mindshubFinalize(): Promise<{ ok: boolean; reason?: string; upgradeRequired?: boolean; apiKey?: string }> {
   if (isElectron && typeof bridge.mindshubFinalize === 'function') {
     return bridge.mindshubFinalize();
   }
