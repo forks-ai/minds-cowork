@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { host } from '../platform/host';
 import { BASE } from '../cowork/api';
 import { PROVIDER_MODELS } from '../cowork/lib/settingsTransform';
+import { MINDS_REGISTER_URL } from './onboarding/constants';
 import OrbitMorph from '../cowork/components/ui/OrbitMorph';
 
 type Provider = 'minds' | 'byok';
@@ -13,8 +14,6 @@ const OPENAI_MODELS = PROVIDER_MODELS.openai;
 const GEMINI_MODELS = PROVIDER_MODELS.gemini;
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
-const KEYCLOAK_URL = import.meta.env.VITE_KEYCLOAK_URL || 'https://auth.mindshub.ai/auth';
-const KEYCLOAK_BASE = KEYCLOAK_URL.replace('/auth', '');
 const MINDS_API_URL = import.meta.env.VITE_MINDS_API_URL || 'https://api.mindshub.ai';
 
 const CUSTOM_MODEL = '__custom__';
@@ -600,7 +599,7 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
           </ul>
           <span
             className="provider-card-link"
-            onClick={(e) => { e.stopPropagation(); host.openExternal(`${KEYCLOAK_BASE}/auth/realms/mindsdb/account`); }}
+            onClick={(e) => { e.stopPropagation(); host.openExternal(MINDS_REGISTER_URL); }}
           >
             Get your first week free &rarr;
           </span>
@@ -691,7 +690,7 @@ export default function Onboarding({ onComplete }: { onComplete: () => void }) {
               Don't have an account?{' '}
               <span
                 className="onboard-link"
-                onClick={() => host.openExternal(`${KEYCLOAK_BASE}/auth/realms/mindsdb/account`)}
+                onClick={() => host.openExternal(MINDS_REGISTER_URL)}
               >
                 Sign up for a free week
               </span>
