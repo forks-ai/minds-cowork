@@ -15,9 +15,11 @@ import { createPortal } from 'react-dom';
 import Ico from '../components/Icons';
 import {
   revealArtifact, publishArtifact, unpublishArtifact,
+  deleteArtifact,
   publishTargetPath, artifactServeUrl, openArtifactFile,
 } from '../api';
 import { copyText } from '../lib/clipboard';
+import { downloadArtifactFile } from '../lib/artifactDownload';
 import { Modal, ModalHeader, ModalBody, ModalFooter } from '../components/ui/Modal';
 import { ArtifactViewer } from '../components/artifact';
 import {
@@ -812,7 +814,7 @@ function StatusDot({ artifact }) {
   );
 }
 
-function RowMenu({ open, anchorRect, artifact, onClose, onOpen, onReveal, onCopyUrl, onPublish, onUnpublish, onDelete }) {
+function RowMenu({ open, anchorRect, artifact, onClose, onOpen, onReveal, onDownload, onCopyUrl, onPublish, onUnpublish, onDelete }) {
   const ref = useRef(null);
   useEffect(() => {
     if (!open) return;
@@ -876,6 +878,9 @@ function RowMenu({ open, anchorRect, artifact, onClose, onOpen, onReveal, onCopy
     >
       <Item label={isHtml ? 'Open viewer' : 'Open'} icon={Ico.externalLink(13)} onClick={onOpen} />
       <Item label="Reveal in Finder" icon={Ico.folder(13)} onClick={onReveal} />
+      {onDownload && artifact?.serveUrl && (
+        <Item label="Download" icon={Ico.download(13)} onClick={onDownload} />
+      )}
       {published && <Item label="Copy URL" icon={Ico.copy(13)} onClick={onCopyUrl} />}
       {isHtml && !published && (
         <Item label="Publish" icon={Ico.upload(13)} onClick={onPublish} />
@@ -885,9 +890,9 @@ function RowMenu({ open, anchorRect, artifact, onClose, onOpen, onReveal, onCopy
       )}
       {/* Delete sits at the bottom under a divider so it reads as a
           terminal / destructive action distinct from the rest of
-          the menu. Routes through the parent's `handleTrash` which
-          uses Electron's `shell.trashItem` — the file goes to the
-          OS Trash, not unlinked, so the action is recoverable. */}
+          the menu. Routes through the parent's `handleTrash`, which
+          unpublishes (if published) and then permanently deletes via
+          cowork-server. */}
       {onDelete && (
         <>
           <div style={{ height: 1, background: 'var(--line)', margin: '4px 0' }} />
@@ -1077,6 +1082,7 @@ function ArtifactRow({ artifact, projects, onOpenViewer, onPublish: doPublish, o
         onClose={() => setMenuOpen(false)}
         onOpen={onRowOpen}
         onReveal={() => revealArtifact(artifact.path)}
+        onDownload={() => downloadArtifactFile(artifact)}
         onCopyUrl={onCopyUrl}
         onPublish={() => doPublish?.(artifact)}
         onUnpublish={() => doUnpublish?.(artifact)}
@@ -1171,6 +1177,15 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
   // Artifact awaiting the publish visibility choice (public vs password).
   // Null when the chooser is closed.
   const [publishTarget, setPublishTarget] = useState(null);
+  // Resolver for the promise returned by `handlePublish`, so a delegated
+  // caller (the preview's Publish button) can await the whole dialog +
+  // POST flow for its busy state. Settled when the chooser confirms,
+  // cancels, or errors — exactly once per flow.
+  const publishResolveRef = useRef(null);
+  const settlePublish = () => {
+    publishResolveRef.current?.();
+    publishResolveRef.current = null;
+  };
   // Page-level state for the shared HoverMenu — mounting the menu at
   // the parent (and not inside a card) is required because cards
   // apply `transform` on hover, which would re-anchor a position:fixed
@@ -1238,18 +1253,22 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
   // small dialog, then confirmPublish does the actual POST. Re-publishing
   // a protected artifact pre-fills its existing password.
   const handlePublish = (artifact) => {
-    if (!artifact?.path || busyPaths.has(artifact.path)) return;
+    if (!artifact?.path || busyPaths.has(artifact.path)) return Promise.resolve();
     if (!isHtmlArtifact(artifact)) {
       setToast({ kind: 'error', message: 'Only HTML artifacts can be published.' });
-      return;
+      return Promise.resolve();
     }
+    // Settle any prior unresolved flow before starting a new one so a
+    // delegated awaiter is never left hanging.
+    settlePublish();
     setPublishTarget(artifact);
+    return new Promise((resolve) => { publishResolveRef.current = resolve; });
   };
 
   const confirmPublish = async (password) => {
     const artifact = publishTarget;
     setPublishTarget(null);
-    if (!artifact?.path || busyPaths.has(artifact.path)) return;
+    if (!artifact?.path || busyPaths.has(artifact.path)) { settlePublish(); return; }
     setBusy(artifact.path, true);
     try {
       const r = await publishArtifact(publishTargetPath(artifact), password || undefined);
@@ -1276,6 +1295,7 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
       setToast({ kind: 'error', message: friendly });
     } finally {
       setBusy(artifact.path, false);
+      settlePublish();
     }
   };
 
@@ -1293,24 +1313,19 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
     }
   };
 
-  // Move the file to the OS Trash and drop it from the local list.
-  // Reuses the Electron `shell.trashItem` IPC the artifact viewer
-  // also calls, so the deletion is reversible from the user's
-  // Trash / Recycle Bin (no extra confirm modal needed).
   const handleTrash = async (artifact) => {
     if (!artifact?.path || busyPaths.has(artifact.path)) return;
     setBusy(artifact.path, true);
     try {
-      // Trash the entire artifact folder (not just the primary file) so
-      // metadata.json is also removed and the artifact disappears from
-      // the server listing on next fetch.
-      const trashTarget = artifact.folder || artifact.path;
-      const result = await host.trashItem(trashTarget);
-      if (result && result.ok === false) {
-        throw new Error(result.reason || 'Could not move to Trash.');
+      // Unpublish first so deletion never leaves an orphaned public copy.
+      // If this fails we abort and keep the artifact (the server enforces
+      // the same rule as a backstop).
+      if (artifact.publishedUrl) {
+        await unpublishArtifact(artifact.path);
       }
+      await deleteArtifact(artifact.folder || artifact.path);
       removeOne(artifact.path);
-      setToast({ kind: 'ok', message: 'Moved to Trash.' });
+      setToast({ kind: 'ok', message: 'Deleted.' });
     } catch (e) {
       setToast({ kind: 'error', message: `Delete failed: ${e?.message || e}` });
     } finally {
@@ -1454,10 +1469,7 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
               onOpenViewer={setViewer}
               onPublish={handlePublish}
               onUnpublish={handleUnpublish}
-              // host.trashItem is Electron-only — gate the delete
-              // option to native runs so the web shell doesn't show
-              // a menu item that wouldn't work.
-              onDelete={!host.isWeb ? handleTrash : undefined}
+              onDelete={handleTrash}
               onOpenProject={onOpenProject}
             />
           ))}
@@ -1476,7 +1488,7 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
       {publishTarget && (
         <PublishDialog
           artifact={publishTarget}
-          onCancel={() => setPublishTarget(null)}
+          onCancel={() => { setPublishTarget(null); settlePublish(); }}
           onConfirm={confirmPublish}
         />
       )}
@@ -1542,17 +1554,14 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
               onClick: () => { try { revealArtifact(a.path); } catch {} },
             });
           }
-          // Delete uses host.trashItem (OS Trash) — no equivalent in web.
-          if (!host.isWeb) {
-            items.push({ separator: true });
-            items.push({
-              id: 'delete',
-              label: 'Delete',
-              icon: Ico.trash(13),
-              danger: true,
-              onClick: () => handleTrash(a),
-            });
-          }
+          items.push({ separator: true });
+          items.push({
+            id: 'delete',
+            label: 'Delete',
+            icon: Ico.trash(13),
+            danger: true,
+            onClick: () => handleTrash(a),
+          });
           return items;
         })()}
       />

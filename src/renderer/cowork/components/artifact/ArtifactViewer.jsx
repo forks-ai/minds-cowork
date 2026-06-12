@@ -12,9 +12,12 @@ import {
   publishArtifact,
   unpublishArtifact,
   publishTargetPath,
+  deleteArtifact,
 } from '../../api';
 import { copyText } from '../../lib/clipboard';
+import { downloadArtifactFile } from '../../lib/artifactDownload';
 import { Modal } from '../ui/Modal';
+import { ConfirmModal } from '../ConfirmModal';
 import { host } from '../../../platform/host';
 import { MarkdownContent } from '../markdown/MarkdownContent';
 
@@ -393,6 +396,8 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
   const [backendPort, setBackendPort] = useState(null);
   const [busy, setBusy] = useState(false);
   const [menuRect, setMenuRect] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const kebabRef = useRef(null);
 
   const isText = _isTextArtifact(artifact);
@@ -524,7 +529,12 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
     // Prefer the parent's visibility chooser (public vs password). Fall
     // back to a direct public publish when no chooser is wired.
     if (onRequestPublish) {
-      onRequestPublish(artifact);
+      setBusy(true);
+      try {
+        await onRequestPublish(artifact);
+      } finally {
+        setBusy(false);
+      }
       return;
     }
     setBusy(true);
@@ -609,57 +619,49 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
       setErr(e?.message || 'Open failed');
     }
   };
-  // Web-shell download — Electron exposes openPath via the IPC bridge,
-  // but the browser build has no filesystem access. We already loaded
-  // the file body via `previewArtifact`, so wrap it in a Blob and
-  // trigger a synthetic anchor click. Only meaningful when textPreview
-  // is populated (i.e. for .md/.txt/.csv).
-  const onDownloadText = () => {
-    if (!textPreview?.content) {
-      setErr('No content available to download.');
-      return;
+  // Universal "save to disk" — type-agnostic stream through the
+  // sidecar's serve endpoint with Content-Disposition: attachment.
+  // Used both by the header action-row Download button and by the
+  // "Download full file" affordance under truncated text/CSV previews
+  // in the web shell (the previous `onDownloadText` was a 200KB-
+  // capped Blob fallback; this streams the real file).
+  const onDownload = () => {
+    if (!downloadArtifactFile(artifact, { actionPath })) {
+      setErr(disabledReason || 'This artifact has no serve URL yet.');
     }
-    const filename = (actionPath || '').split('/').pop() || artifact.title || 'artifact.txt';
-    const blob = new Blob([textPreview.content], {
-      type: textPreview.mime || 'text/plain;charset=utf-8',
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    // Revoke after the click lands — Safari needs a tick before the
-    // download actually starts; revoking synchronously cancels it.
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
-  const onTrash = async () => {
+  const onTrash = () => {
     if (busy) return;
     if (!hasActionPath) {
       setErr(disabledReason || 'This artifact does not have a local file path.');
       return;
     }
-    // No confirmation modal — `shell.trashItem` is recoverable from the
-    // user's Trash, so a click is reversible. The viewer closes once
-    // the file is gone so we don't leave a dead preview on screen.
-    // Trash the entire artifact folder (not just the primary file) so
-    // the metadata.json is also removed and the artifact disappears
-    // from the listing.
-    setBusy(true);
+    setConfirmDelete(true);
+  };
+  const onConfirmDelete = async () => {
+    // Deletion is centralized through cowork-server (not shell.trashItem)
+    // so the server's unpublish-before-delete guard always runs. The whole
+    // artifact folder is removed (not just the primary file) so metadata.json
+    // goes too and the artifact disappears from the listing. The viewer
+    // closes once the file is gone so we don't leave a dead preview on screen.
+    setDeleteBusy(true);
     setErr('');
     try {
-      const trashTarget = artifact?.folder || actionPath;
-      const result = await host.trashItem(trashTarget);
-      if (result && result.ok === false) {
-        throw new Error(result.reason || 'Could not move to Trash.');
+      // Unpublish first so deletion never leaves an orphaned public copy.
+      // The server enforces the same rule as a backstop.
+      if (publishedUrl) {
+        await unpublishArtifact(actionPath);
       }
+      await deleteArtifact(artifact?.folder || actionPath);
+      setConfirmDelete(false);
       onDelete?.(actionPath);
       onClose?.();
     } catch (e) {
+      setDeleteBusy(false);
+      setConfirmDelete(false);
       setErr(e?.message || 'Delete failed');
     } finally {
-      setBusy(false);
+      setDeleteBusy(false);
     }
   };
   const onOpenPublished = async () => {
@@ -839,6 +841,23 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
               {busy ? 'Publishing…' : 'Publish'}
             </button>
           )}
+          {artifact?.serveUrl && (
+            <button
+              type="button"
+              onClick={onDownload}
+              title="Download artifact to your computer"
+              style={{
+                cursor: 'pointer',
+                background: 'transparent',
+                border: '1px solid var(--line)',
+                color: 'var(--ink-2)',
+                padding: '6px 12px', borderRadius: 8,
+                fontSize: 12.5, fontWeight: 500,
+              }}
+            >
+              Download
+            </button>
+          )}
           <button
             ref={kebabRef}
             type="button"
@@ -882,9 +901,10 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
           anchorRect={menuRect}
           onClose={() => setMenuRect(null)}
           items={[
-            // Open in OS / Delete drop out in the hosted web shell —
-            // both depend on the renderer sharing a filesystem with the
-            // server, which is only true in Electron.
+            // "Open in OS" drops out in the hosted web shell — it depends
+            // on the renderer sharing a filesystem with the server, which
+            // is only true in Electron. Delete stays available everywhere
+            // because it runs server-side via cowork-server.
             ...(host.isWeb ? [] : [{
               label: 'Open in OS',
               icon: Ico.externalLink(13),
@@ -892,22 +912,28 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
               title: isBackendArtifact && !backendPort ? 'Waiting for backend port…' : undefined,
               onClick: onOpenOS,
             }]),
+            // Download mirrors the main action-row button and the
+            // list-view kebab — visible in any shell as long as the
+            // artifact has a serve URL the sidecar can stream.
+            ...(artifact?.serveUrl ? [{
+              label: 'Download',
+              icon: Ico.download(13),
+              onClick: onDownload,
+            }] : []),
             {
               label: publishedUrl ? 'Unpublish' : 'Publish',
               icon: Ico.upload(13),
               disabled: busy || !hasActionPath,
               onClick: publishedUrl ? onUnpublish : onPublish,
             },
-            ...(host.isWeb ? [] : [
-              { divider: true },
-              {
-                label: 'Delete',
-                icon: Ico.trash(13),
-                danger: true,
-                disabled: busy || !hasActionPath,
-                onClick: onTrash,
-              },
-            ]),
+            { divider: true },
+            {
+              label: 'Delete',
+              icon: Ico.trash(13),
+              danger: true,
+              disabled: busy || !hasActionPath,
+              onClick: onTrash,
+            },
           ]}
         />
 
@@ -959,7 +985,7 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
                   </span>
                   <button
                     type="button"
-                    onClick={host.isWeb ? onDownloadText : onOpenOS}
+                    onClick={host.isWeb ? onDownload : onOpenOS}
                     style={{
                       cursor: 'pointer',
                       background: 'transparent',
@@ -993,6 +1019,20 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
             ) : null
           )}
         </div>
+
+        {/* Delete confirmation */}
+        <ConfirmModal
+          open={confirmDelete}
+          title="Delete artifact?"
+          message={`"${artifact.title || artifact.path?.split('/').pop()}" will be permanently deleted. This cannot be undone.`}
+          confirmLabel="Delete"
+          destructive
+          busy={deleteBusy}
+          busyLabel="Deleting…"
+          onConfirm={onConfirmDelete}
+          onClose={() => { if (!deleteBusy) setConfirmDelete(false); }}
+        />
+
     </Modal>
   );
 }
