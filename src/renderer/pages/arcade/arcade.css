@@ -634,6 +634,11 @@
 .arc-title-logo {
   font-size: clamp(56px, 11vw, 96px);
   font-weight: 700;
+  /* The sibling rule below can be wider than the glyphs, stretching the
+     shared wrapper — without an explicit center the text hugs the left.
+     text-indent balances the trailing letter-space after the final K. */
+  text-align: center;
+  text-indent: 0.06em;
   letter-spacing: 0.06em;
   color: var(--arc-ink);
   text-shadow: 0 0 34px rgba(236, 237, 246, 0.22);
