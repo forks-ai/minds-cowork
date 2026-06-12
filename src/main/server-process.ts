@@ -61,17 +61,22 @@ function appendStderr(chunk: string) {
 let logStream: fs.WriteStream | null = null;
 
 export function getServerLogPath(): string {
-  /* getPath('logs') resolves to ~/Library/Logs/<AppName> on macOS. Electron
-     does not guarantee the directory exists, so create it before use. */
-  const dir = app.getPath('logs');
-  fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, 'cowork-server.log');
+  /* getPath('logs') resolves to ~/Library/Logs/<AppName> on macOS,
+     %APPDATA%/<AppName>/logs on Windows, ~/.config/<AppName>/logs on Linux.
+     Pure getter — the directory is created lazily in openLogStream(), so
+     callers that only need the path (e.g. the Help > Reveal Logs menu item)
+     don't trigger a filesystem write on every invocation. */
+  return path.join(app.getPath('logs'), 'cowork-server.log');
 }
 
 function openLogStream(): void {
   try {
     logStream?.end();
-    logStream = fs.createWriteStream(getServerLogPath(), { flags: 'w' });
+    const logPath = getServerLogPath();
+    /* Electron does not guarantee the logs directory exists; create it
+       here, at the one point we actually open the stream for writing. */
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    logStream = fs.createWriteStream(logPath, { flags: 'w' });
   } catch {
     /* Logging to disk is best-effort — never let it block server startup. */
     logStream = null;
