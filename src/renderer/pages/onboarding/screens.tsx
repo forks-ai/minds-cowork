@@ -72,7 +72,7 @@ export function WelcomeScreen({
 }) {
   return (
     <div className="onboard-content-inner">
-      <div className="onboard-heading">Welcome to Anton CoWork</div>
+      <div className="onboard-heading">Welcome to MindsHub Cowork</div>
       <div style={{
         fontSize: 13.5,
         color: 'var(--text-muted)',
@@ -243,7 +243,7 @@ export function SubscribePendingScreen({
         textAlign: 'center',
       }}>
         Finish checkout in your browser. Once you&apos;re subscribed,
-        click below and Anton will pick it up.
+        click below and Cowork will pick it up.
       </div>
 
       {errorMsg && <div className="error-message">{errorMsg}</div>}
@@ -320,8 +320,8 @@ export function ByokScreen({
         textWrap: 'balance',
       }}>
         {isLoggedIn
-          ? "Pick an LLM provider for Anton to use. You're still signed in to MindsHub, so publishing and data connectors stay available."
-          : "Pick an LLM provider for Anton to use. You can sign in to MindsHub later from Settings to unlock publishing and connectors."}
+          ? "Pick an LLM provider for Cowork to use. You're still signed in to MindsHub, so publishing and data connectors stay available."
+          : "Pick an LLM provider for Cowork to use. You can sign in to MindsHub later from Settings to unlock publishing and connectors."}
       </div>
 
       <div className="onboard-secondary-actions">

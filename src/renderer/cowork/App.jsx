@@ -65,7 +65,7 @@ const CONNECT_FOLLOWUPS = [
   const hash = typeof __GIT_HASH__ !== 'undefined' && __GIT_HASH__ ? __GIT_HASH__ : '';
   const built = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : '';
   console.log(
-    '%c Anton %c Build Info ',
+    '%c Cowork %c Build Info ',
     'background:#7CC4B6;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px 0 0 3px',
     'background:#334;color:#eee;padding:2px 6px;border-radius:0 3px 3px 0',
   );
@@ -125,7 +125,7 @@ function normalizeAntonError(message, event) {
     return 'No LLM provider is configured for this account. Subscribe with MindsHub or add your own provider in Settings.';
   }
   const text = String(message || '');
-  return text || 'Anton could not complete this task.';
+  return text || 'Could not complete this task.';
 }
 
 async function resolveComposerAttachmentsForSend(projectName, sessionId, attachments) {
