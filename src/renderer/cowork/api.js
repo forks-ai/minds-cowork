@@ -236,18 +236,28 @@ export async function fetchSession(id) {
   }
 }
 
-/** 
- * Matches server `conversation_manager._new_conversation_id` (UTC) so client can upload before the first stream. 
- * This is required especially when the user uploads files before the first stream, so the server can assign the files to the correct conversation.
-*/
+/**
+ * Pre-allocates the id for a conversation that doesn't exist yet, so
+ * attachments can be uploaded against it before the first stream. The
+ * server adopts a client-supplied UUID as the conversation's real id
+ * (ENG-264) — the old timestamp format here predated the DB-backed
+ * server and made it create a different id, stranding the uploads.
+ */
 export function allocateConversationId() {
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}_${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;
-  const hex = typeof crypto !== 'undefined' && crypto.getRandomValues
-    ? Array.from(crypto.getRandomValues(new Uint8Array(3)), (b) => b.toString(16).padStart(2, '0')).join('')
-    : Math.random().toString(16).slice(2, 8);
-  return `${stamp}_${hex}`;
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  // randomUUID is gated to secure contexts, but getRandomValues isn't —
+  // assemble an RFC-4122 v4 UUID from raw bytes so the server can still
+  // adopt the id (and CodeQL doesn't flag a Math.random in the id flow).
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    const b = crypto.getRandomValues(new Uint8Array(16));
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  }
+  // No crypto at all (not a real Electron/browser case): the server
+  // can't adopt a non-UUID id but re-links the uploads it covers.
+  return `${Date.now().toString(36)}-${(typeof performance !== 'undefined' ? Math.floor(performance.now() * 1e6) : 0).toString(36)}`;
 }
 
 // Streams a /v1/responses request. Maps OpenAI-style typed events to the
