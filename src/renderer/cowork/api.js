@@ -236,18 +236,18 @@ export async function fetchSession(id) {
   }
 }
 
-/** 
- * Matches server `conversation_manager._new_conversation_id` (UTC) so client can upload before the first stream. 
- * This is required especially when the user uploads files before the first stream, so the server can assign the files to the correct conversation.
-*/
+/**
+ * Pre-allocates the id for a conversation that doesn't exist yet, so
+ * attachments can be uploaded against it before the first stream. The
+ * server adopts a client-supplied UUID as the conversation's real id
+ * (ENG-264) — the old timestamp format here predated the DB-backed
+ * server and made it create a different id, stranding the uploads.
+ */
 export function allocateConversationId() {
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}_${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;
-  const hex = typeof crypto !== 'undefined' && crypto.getRandomValues
-    ? Array.from(crypto.getRandomValues(new Uint8Array(3)), (b) => b.toString(16).padStart(2, '0')).join('')
-    : Math.random().toString(16).slice(2, 8);
-  return `${stamp}_${hex}`;
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  // Non-secure-context fallback: the server can't adopt a non-UUID id,
+  // but it re-links the uploads to the conversation it creates instead.
+  return `${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
 // Streams a /v1/responses request. Maps OpenAI-style typed events to the
