@@ -117,6 +117,14 @@ async def create_response(req: ResponsesRequest):
                     "event: response.failed\n"
                     f"data: {json.dumps({'type': 'response.failed', 'code': 'config_required', 'error': 'Configuration error'})}\n\n"
                 )
+            except conversation_manager.AntonUserError as exc:
+                # Curated, user-safe copy (e.g. an unsupported image) —
+                # surface it verbatim instead of the generic fallback.
+                logger.info("Anton user-facing error: %s", exc)
+                yield (
+                    "event: response.failed\n"
+                    f"data: {json.dumps({'type': 'response.failed', 'code': getattr(exc, 'code', None) or 'anton_error', 'error': str(exc)})}\n\n"
+                )
             except conversation_manager.AntonRuntimeError as exc:
                 logger.error("Anton runtime error: %s", exc)
                 yield (
@@ -173,6 +181,9 @@ async def create_response(req: ResponsesRequest):
     except conversation_manager.AntonConfigurationError as exc:
         logger.warning("Anton configuration error: %s", exc)
         raise HTTPException(status_code=400, detail="Configuration error")
+    except conversation_manager.AntonUserError as exc:
+        logger.info("Anton user-facing error: %s", exc)
+        raise HTTPException(status_code=400, detail=str(exc))
     except conversation_manager.AntonRuntimeError as exc:
         logger.error("Anton runtime error: %s", exc)
         raise HTTPException(status_code=500, detail="An unexpected error occurred")
@@ -353,6 +364,12 @@ async def tail_response(
                 event_sink=None,
             ):
                 yield chunk
+        except conversation_manager.AntonUserError as exc:
+            logger.info("Anton user-facing error during tail: %s", exc)
+            yield (
+                "event: response.failed\n"
+                f"data: {json.dumps({'type': 'response.failed', 'code': getattr(exc, 'code', None) or 'anton_error', 'error': str(exc)})}\n\n"
+            )
         except conversation_manager.AntonRuntimeError as exc:
             logger.error("Anton runtime error during tail: %s", exc)
             yield (

@@ -117,6 +117,22 @@ class AntonRuntimeError(RuntimeError):
     """Raised when a real Anton session fails after configuration passes."""
 
 
+class AntonUserError(AntonRuntimeError):
+    """A turn failure whose message is safe and meaningful to show the user.
+
+    Unlike a bare ``AntonRuntimeError`` — whose raw text the route
+    deliberately replaces with a generic "An unexpected error occurred"
+    so provider internals never leak — the message carried here is a
+    curated, human-readable string. The route surfaces it verbatim.
+    Use it only for failures we've explicitly mapped to friendly copy
+    (see ``_friendly_turn_error``).
+    """
+
+    def __init__(self, message: str, code: str | None = None):
+        super().__init__(message)
+        self.code = code
+
+
 def is_anton_available() -> bool:
     return ANTON_AVAILABLE
 
@@ -1194,7 +1210,7 @@ async def _build_chat_session(
         system_prompt_context=SystemPromptContext(
             runtime_context=build_runtime_context(settings),
             suffix=(
-                "The Anton Cowork desktop UI displays progress, tool usage, and actions "
+                "The MindsHub Cowork desktop UI displays progress, tool usage, and actions "
                 "as separate structured activity rows. Keep assistant text focused on the "
                 "user-facing answer; do not narrate internal work with status phrases like "
                 "\"I'll check\", \"let me query\", or \"I have access\" unless that wording "
@@ -1440,6 +1456,43 @@ def _is_tool_use_error(exc: Exception) -> bool:
     )
 
 
+def _is_image_format_error(exc: Exception) -> bool:
+    """Detect the Anthropic 400 raised when an image reaches the model
+    as the OpenAI-style ``image_url`` content block instead of
+    Anthropic's ``image`` block. Surfaces as e.g.::
+
+        Input tag 'image_url' found using 'type' does not match any of
+        the expected tags: 'image'
+
+    The block format itself is built upstream in anton-core, so we
+    can't repair it here — but we can recognise the failure and trade
+    the raw provider JSON for a clean, actionable message instead of
+    dumping it into the chat.
+    """
+    s = str(exc).lower()
+    if "image_url" in s and ("expected tag" in s or "does not match" in s):
+        return True
+    # Other phrasings of "this image content block was rejected".
+    return "image" in s and ("unsupported image" in s or "could not process image" in s)
+
+
+_IMAGE_FORMAT_USER_MESSAGE = (
+    "Sorry, I couldn't process that image. Try uploading it as a PNG or JPEG."
+)
+
+
+def _friendly_turn_error(exc: Exception) -> tuple[str, str] | None:
+    """Map a known, cryptic turn failure to ``(code, user_message)``.
+
+    Returns ``None`` when the exception isn't one we have curated copy
+    for — the caller then falls back to the redacted raw message and
+    the route's generic handling.
+    """
+    if _is_image_format_error(exc):
+        return "image_format", _IMAGE_FORMAT_USER_MESSAGE
+    return None
+
+
 async def _finalize_history_on_explicit_cancel(
     session: Any,
     partial_assistant_parts: list[str],
@@ -1639,7 +1692,16 @@ async def _produce_turn(
                 logger.exception("Conversation %s failed", cid)
                 if "Errno 2" in str(exc) or "No such file or directory" in str(exc):
                     _evict_session(cid)
-                buf.append("Error", {"message": _safe_error(exc)})
+                friendly = _friendly_turn_error(exc)
+                if friendly is not None:
+                    code, message = friendly
+                    buf.append("Error", {
+                        "code": code,
+                        "message": message,
+                        "user_facing": True,
+                    })
+                else:
+                    buf.append("Error", {"message": _safe_error(exc)})
                 buf.close("error")
                 return
 
@@ -1798,7 +1860,9 @@ async def _read_handle_events(handle, *, from_seq: int = 0) -> AsyncGenerator:
         history.
       - ``Error``       → raise ``AntonRuntimeError`` so the route
         emits ``response.failed`` — preserves the existing
-        exception-based control flow at the route layer.
+        exception-based control flow at the route layer. Records
+        flagged ``user_facing`` raise ``AntonUserError`` instead, whose
+        curated message the route surfaces verbatim.
 
     Safe to cancel at any time (client closes the tab, fetch aborts):
     the underlying producer task is unaffected.
@@ -1806,6 +1870,11 @@ async def _read_handle_events(handle, *, from_seq: int = 0) -> AsyncGenerator:
     async for rec in tail_buffer(handle.buffer, from_seq=from_seq):
         if rec.type == "Error":
             msg = rec.data.get("message") or "Anton encountered an unexpected error."
+            # `user_facing` records carry curated, safe copy (e.g. the
+            # image-format failure) — surface them verbatim. Everything
+            # else stays an opaque AntonRuntimeError the route genericises.
+            if rec.data.get("user_facing"):
+                raise AntonUserError(msg, code=rec.data.get("code"))
             raise AntonRuntimeError(msg)
         if rec.type in ("Done", "Cancelled", "Interrupted"):
             return

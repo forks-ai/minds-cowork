@@ -27,6 +27,15 @@ const MINDS_LLM_BASE_URL = 'https://api.mindshub.ai/v1';
 // re-onboarding from leaking ghost keys in the user's account.
 const ANTON_KEY_NAME = 'hub:anton';
 
+// Every auth-service / Keycloak request gets a hard deadline. Node's
+// fetch has none by default, so a black-holed connection would hang
+// the onboarding "TESTING LINK…" phase forever with no error to show.
+const REQUEST_TIMEOUT_MS = 30_000;
+
+function timedFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), ...init });
+}
+
 // True iff the user has previously finalized onboarding with Minds as
 // their LLM. Lets the boot-time silent refresh decide whether a new
 // access token is worth pulling — the env file is the source of truth
@@ -47,7 +56,7 @@ export async function refreshTokensOnly(): Promise<string | null> {
   const refreshToken = getRefreshToken();
   if (!refreshToken) return null;
   try {
-    const res = await fetch(TOKEN_URL, {
+    const res = await timedFetch(TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -91,7 +100,7 @@ export async function endKeycloakSession(): Promise<void> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 3000);
   try {
-    await fetch(`${KEYCLOAK_BASE}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/logout`, {
+    await timedFetch(`${KEYCLOAK_BASE}/realms/${KEYCLOAK_REALM}/protocol/openid-connect/logout`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -175,7 +184,7 @@ function pushUniqueOrg(target: OrgRef[], seen: Set<string>, org: OrgRef | null) 
 
 async function getCurrentActiveOrg(accessToken: string): Promise<OrgRef | null> {
   try {
-    const res = await fetch(
+    const res = await timedFetch(
       `${KEYCLOAK_BASE}/realms/${KEYCLOAK_REALM}/users/active-organization`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
@@ -194,7 +203,7 @@ async function getCurrentActiveOrg(accessToken: string): Promise<OrgRef | null> 
 
 async function listUserOrgs(accessToken: string, userId: string): Promise<OrgRef[]> {
   try {
-    const res = await fetch(
+    const res = await timedFetch(
       `${KEYCLOAK_BASE}/realms/${KEYCLOAK_REALM}/users/${encodeURIComponent(userId)}/orgs?first=0&max=100`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
@@ -228,7 +237,7 @@ async function listOrgCandidates(
 
 async function switchActiveOrg(accessToken: string, orgId: string): Promise<boolean> {
   try {
-    const res = await fetch(
+    const res = await timedFetch(
       `${KEYCLOAK_BASE}/realms/${KEYCLOAK_REALM}/users/switch-organization`,
       {
         method: 'PUT',
@@ -321,7 +330,7 @@ export interface ProvisionResult {
 
 async function listExistingKeys(accessToken: string): Promise<{ name?: string; prefix?: string }[]> {
   try {
-    const res = await fetch(`${AUTH_SERVICE_URL}/api-keys/`, {
+    const res = await timedFetch(`${AUTH_SERVICE_URL}/api-keys/`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!res.ok) return [];
@@ -336,7 +345,7 @@ async function listExistingKeys(accessToken: string): Promise<{ name?: string; p
 
 async function deleteKeyByPrefix(accessToken: string, prefix: string): Promise<void> {
   try {
-    await fetch(`${AUTH_SERVICE_URL}/api-keys/${encodeURIComponent(prefix)}/`, {
+    await timedFetch(`${AUTH_SERVICE_URL}/api-keys/${encodeURIComponent(prefix)}/`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${accessToken}` },
     });
@@ -358,7 +367,7 @@ async function fetchAuthContext(accessToken: string): Promise<{
   entitlements?: any;
 }> {
   try {
-    const res = await fetch(`${AUTH_SERVICE_URL}/authenticate/`, {
+    const res = await timedFetch(`${AUTH_SERVICE_URL}/authenticate/`, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -489,7 +498,7 @@ export async function provisionAntonApiKey(initialToken: string): Promise<Provis
   // free tier — surface that distinctly so the renderer can show the
   // paywall instead of a generic error.
   try {
-    const res = await fetch(`${AUTH_SERVICE_URL}/api-keys/`, {
+    const res = await timedFetch(`${AUTH_SERVICE_URL}/api-keys/`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${provisionToken}`,

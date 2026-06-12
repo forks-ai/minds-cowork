@@ -15,7 +15,7 @@ import ScheduledView from './views/ScheduledView';
 import TasksView from './views/TasksView';
 import ScheduleDetailView from './views/ScheduleDetailView';
 import ArtifactsView from './views/ArtifactsView';
-import DispatchView from './views/DispatchView';
+import ChannelsView from './views/ChannelsView';
 import CustomizeView from './views/CustomizeView';
 import SettingsView from './views/SettingsView';
 import UtilitiesView from './views/UtilitiesView';
@@ -23,7 +23,10 @@ import SearchModal from './components/SearchModal';
 import ConnectorPicker from './components/connector/ConnectorPicker';
 import ServerOfflineHelpModal from './components/ServerOfflineHelpModal';
 import { setForm as setDataVaultForm, getForm as getDataVaultForm, clearForm as clearDataVaultForm, patchForm as patchDataVaultForm, getFormState as getDataVaultFormState } from './components/datavault/formStore';
+import { extractFormSpec } from './components/datavault/parseFormSpec';
 import { host } from '../platform/host';
+import { loadSkin, persistSkin, nextSkin, skinLabel } from '../lib/skins';
+import { loadCustomTheme, persistCustomTheme, applyCustomTheme } from '../lib/customTheme';
 import { getAgentLabel } from './lib/agentLabel';
 import { useBreakpoint } from './hooks/useBreakpoint';
 import { fetchSessions, fetchSession, fetchProjects, fetchArtifacts, fetchSettings, fetchHealth,
@@ -65,7 +68,7 @@ const CONNECT_FOLLOWUPS = [
   const hash = typeof __GIT_HASH__ !== 'undefined' && __GIT_HASH__ ? __GIT_HASH__ : '';
   const built = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : '';
   console.log(
-    '%c Anton %c Build Info ',
+    '%c Cowork %c Build Info ',
     'background:#7CC4B6;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px 0 0 3px',
     'background:#334;color:#eee;padding:2px 6px;border-radius:0 3px 3px 0',
   );
@@ -125,7 +128,7 @@ function normalizeAntonError(message, event) {
     return 'No LLM provider is configured for this account. Subscribe with MindsHub or add your own provider in Settings.';
   }
   const text = String(message || '');
-  return text || 'Anton could not complete this task.';
+  return text || 'Could not complete this task.';
 }
 
 async function resolveComposerAttachmentsForSend(projectName, sessionId, attachments) {
@@ -193,6 +196,29 @@ function pickContinuePrompt() {
 
 function stripStreaming(messages) {
   return messages.filter((m) => m.role !== '_streaming');
+}
+
+// Open the data-vault side panel for a form the agent just streamed.
+// Called from the stream `onDone` handlers — the deterministic, fires-
+// exactly-once-per-turn place to do this. We can't rely on the
+// in-markdown MarkdownCode path: by the time the streamed block is
+// `complete`, its message has committed to history and mounts
+// already-complete, so MarkdownCode's "historical replay" guard
+// (which exists to stop dismissed forms reappearing on navigation)
+// suppresses the dispatch. onDone only runs for a live turn, so it
+// has no such ambiguity. No-op for the overwhelming majority of turns
+// that carry no form fence.
+function openStreamedForm(conversationId, finalContent) {
+  if (!conversationId || !finalContent) return;
+  let result;
+  try {
+    result = extractFormSpec(finalContent);
+  } catch {
+    return;
+  }
+  if (result.found && result.spec) {
+    setDataVaultForm(conversationId, result.spec);
+  }
 }
 
 // Status values the stream reducer leaves behind for IN-FLIGHT step
@@ -999,6 +1025,14 @@ function AppCore() {
       return saved === 'light' || saved === 'dark' ? saved : 'dark';
     } catch { return 'dark'; }
   });
+  // Skin — a second styling axis, orthogonal to light/dark. Each entry
+  // in the SKINS registry (lib/skins.ts) maps to a token-override
+  // stylesheet keyed on body[data-skin]; both color schemes have a
+  // variant per skin, so the two toggles compose freely.
+  const [skin, setSkin] = useState(loadSkin);
+  // The "design your own" recipe behind the `custom` skin — edited in
+  // Settings → Appearance, applied as inline body token overrides.
+  const [customTheme, setCustomTheme] = useState(loadCustomTheme);
 
   // Routes that allow the sidebar to be collapsed via Cmd+B. Read via
   // a ref so the keydown listener (mounted once) sees the live route
@@ -1068,6 +1102,19 @@ function AppCore() {
       window.gravityField.setTheme(theme);
     }
   }, [theme]);
+
+  useEffect(() => {
+    persistSkin(skin);
+    document.body.dataset.skin = skin;
+  }, [skin]);
+
+  // Custom-skin recipe → inline body tokens. Applied only while the
+  // custom skin is active; cleared otherwise so the stylesheet-driven
+  // skins are untouched.
+  useEffect(() => {
+    persistCustomTheme(customTheme);
+    applyCustomTheme(skin === 'custom' ? customTheme : null);
+  }, [skin, customTheme]);
 
   // Mirror the Dot grid setting to a body class so the gravity-field
   // canvas can be hidden via CSS. `display: none` also lets the
@@ -1527,6 +1574,8 @@ function AppCore() {
         }));
         if (finalContent && !configErrorInBody) {
           persistTurnState(taskId, assistantTurnIndex, finalSteps, finalStartedAt);
+          // Open the side panel if the agent streamed a connect form.
+          openStreamedForm(taskId, finalContent);
         }
         fetchArtifacts().then((data) => { if (Array.isArray(data)) setArtifacts(data); });
       },
@@ -2356,6 +2405,9 @@ function AppCore() {
         // sidecar in localStorage.
         if (finalContent && !configErrorInBody) {
           persistTurnState(finalId, assistantTurnIndex, finalSteps, finalStartedAt);
+          // If the agent streamed a connect form, open the side panel
+          // now (keyed to the resolved conversation id the panel reads).
+          openStreamedForm(finalId, finalContent);
         }
         fetchArtifacts().then((data) => { if (Array.isArray(data)) setArtifacts(data); });
       },
@@ -2593,6 +2645,7 @@ function AppCore() {
         if (finalContent && !configErrorInBody) {
           // Sidecar — see persistTurnState comment for the full schema.
           persistTurnState(resolvedId, assistantTurnIndex, finalSteps, finalStartedAt);
+          openStreamedForm(resolvedId, finalContent);
         }
         fetchArtifacts().then((data) => { if (Array.isArray(data)) setArtifacts(data); });
         // Drain the next queued message for this task (if any) so a
@@ -2771,6 +2824,7 @@ function AppCore() {
         }));
         if (finalContent) {
           persistTurnState(resolvedId, assistantTurnIndex, finalSteps, finalStartedAt);
+          openStreamedForm(resolvedId, finalContent);
         }
         // A successful save changes the connectors list — refetch
         // so the Connect Apps and Data page reflects it immediately.
@@ -3463,7 +3517,7 @@ function AppCore() {
         )}
 
         {route === 'dispatch' && (
-          <DispatchView onSetUpLater={() => setRoute('home')} agentLabel={agentLabel} />
+          <ChannelsView />
         )}
 
         {route === 'customize' && (
@@ -3479,7 +3533,7 @@ function AppCore() {
         )}
 
         {route === 'settings' && (
-          <SettingsView settings={settings} setSetting={setSetting} onSave={saveSettings} theme={theme} onThemeChange={setTheme} agentLabel={agentLabel} />
+          <SettingsView settings={settings} setSetting={setSetting} onSave={saveSettings} theme={theme} onThemeChange={setTheme} skin={skin} onSkinChange={setSkin} customTheme={customTheme} onCustomThemeChange={setCustomTheme} agentLabel={agentLabel} />
         )}
 
         {/* Legacy 'connect' kind removed — Connect Apps and Data is now
@@ -3668,6 +3722,19 @@ function AppCore() {
         style={{ WebkitAppRegion: 'no-drag' }}
       >
         {theme === 'dark' ? Ico.sun(15) : Ico.moon(15)}
+      </button>
+
+      {/* Floating skin toggle — stacked above the theme toggle. Cycles
+          through the SKINS registry, same persistence model as
+          light/dark. */}
+      <button
+        onClick={() => setSkin(nextSkin(skin))}
+        title={`Style: ${skinLabel(skin)} — switch to ${skinLabel(nextSkin(skin))}`}
+        aria-label={`Switch style to ${skinLabel(nextSkin(skin))}`}
+        className="floating-theme-toggle floating-skin-toggle"
+        style={{ WebkitAppRegion: 'no-drag' }}
+      >
+        {Ico.gamepad(15)}
       </button>
 
       {/* OTA update overlay — shown during auto-update download/reload */}
