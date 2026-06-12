@@ -2,7 +2,8 @@
 // to the agent. Most rows are auto-created on first inbound message, so this
 // panel is mainly for editing them (label, trigger rule, pinned project) and
 // removing stale ones; a manual "Add route" form is provided for pre-wiring a
-// known chat id.
+// known chat id. When `channelType` is given the panel is scoped to that one
+// channel: rows are filtered and new routes are created on it.
 
 import { useEffect, useState } from 'react';
 import Ico from '../components/Icons';
@@ -17,7 +18,7 @@ import {
 const TRIGGERS = ['always', 'mention_only', 'regex'];
 const BLANK = { channel_type: '', external_group_id: '', display_name: '', trigger_rule: 'always', trigger_pattern: '', anton_project_id: '' };
 
-export default function ChannelBindings({ plugins = [] }) {
+export default function ChannelBindings({ plugins = [], channelType = null }) {
   const [bindings, setBindings] = useState([]);
   const [projects, setProjects] = useState([]);
   const [edits, setEdits] = useState({});   // id -> partial patch
@@ -62,11 +63,12 @@ export default function ChannelBindings({ plugins = [] }) {
 
   async function addRow() {
     setError('');
-    if (!draft.channel_type || !draft.external_group_id.trim()) {
-      setError('Pick a channel and enter the chat/group id.');
+    const type = channelType || draft.channel_type;
+    if (!type || !draft.external_group_id.trim()) {
+      setError(channelType ? 'Enter the chat/group id.' : 'Pick a channel and enter the chat/group id.');
       return;
     }
-    const payload = { channel_type: draft.channel_type, external_group_id: draft.external_group_id.trim(), trigger_rule: draft.trigger_rule };
+    const payload = { channel_type: type, external_group_id: draft.external_group_id.trim(), trigger_rule: draft.trigger_rule };
     if (draft.display_name.trim()) payload.display_name = draft.display_name.trim();
     if (draft.trigger_rule === 'regex' && draft.trigger_pattern.trim()) payload.trigger_pattern = draft.trigger_pattern.trim();
     if (draft.anton_project_id) payload.anton_project_id = draft.anton_project_id;
@@ -80,6 +82,7 @@ export default function ChannelBindings({ plugins = [] }) {
   }
 
   const projectName = (id) => projects.find((p) => p.id === id)?.name || '';
+  const rows = channelType ? bindings.filter((b) => b.channel_type === channelType) : bindings;
 
   return (
     <section className="channels-routes">
@@ -91,11 +94,13 @@ export default function ChannelBindings({ plugins = [] }) {
       {error ? <p className="channels-error">{error}</p> : null}
 
       <div className="channels-route-add">
-        <select className="channels-input" value={draft.channel_type}
-          onChange={(e) => setDraft({ ...draft, channel_type: e.target.value })}>
-          <option value="">Channel…</option>
-          {plugins.map((p) => <option key={p.channel_type} value={p.channel_type}>{p.display_name}</option>)}
-        </select>
+        {channelType ? null : (
+          <select className="channels-input" value={draft.channel_type}
+            onChange={(e) => setDraft({ ...draft, channel_type: e.target.value })}>
+            <option value="">Channel…</option>
+            {plugins.map((p) => <option key={p.channel_type} value={p.channel_type}>{p.display_name}</option>)}
+          </select>
+        )}
         <input className="channels-input" placeholder="chat / group id"
           value={draft.external_group_id}
           onChange={(e) => setDraft({ ...draft, external_group_id: e.target.value })} />
@@ -115,20 +120,20 @@ export default function ChannelBindings({ plugins = [] }) {
 
       {loading ? (
         <p className="channels-muted">Loading routes…</p>
-      ) : bindings.length === 0 ? (
+      ) : rows.length === 0 ? (
         <p className="channels-muted">No routes yet — message the bot and one appears here.</p>
       ) : (
         <table className="channels-route-table">
           <thead>
-            <tr><th>Channel</th><th>Chat</th><th>Label</th><th>Trigger</th><th>Project</th><th></th></tr>
+            <tr>{channelType ? null : <th>Channel</th>}<th>Chat</th><th>Label</th><th>Trigger</th><th>Project</th><th></th></tr>
           </thead>
           <tbody>
-            {bindings.map((b) => {
+            {rows.map((b) => {
               const dirty = !!edits[b.id] && Object.keys(edits[b.id]).length > 0;
               const rule = rowValue(b, 'trigger_rule');
               return (
                 <tr key={b.id}>
-                  <td><span className="channels-badge channels-badge-idle">{b.channel_type}</span></td>
+                  {channelType ? null : <td><span className="channels-badge channels-badge-idle">{b.channel_type}</span></td>}
                   <td className="channels-type">{b.external_group_id}{b.external_thread_id ? `/${b.external_thread_id}` : ''}</td>
                   <td>
                     <input className="channels-input channels-input-sm" value={rowValue(b, 'display_name')}
