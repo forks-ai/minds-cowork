@@ -4,7 +4,8 @@ import { validateSettings, revealSettingKey, testProviders, fetchHealth } from '
 import { providerTypeToKeyField, providerValueToType } from '../lib/settingsTransform';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { host } from '../../platform/host';
-import { MINDS_API_KEY_URL } from '../../pages/onboarding/constants';
+import { SKINS, normalizeSkin } from '../../lib/skins';
+import { MINDS_API_KEY_URL } from '../../lib/mindsUrls';
 import { getUIVersion, isElectron } from '../../platform/host';
 
 // Provider preset → underlying canonical fields. The Settings UI uses
@@ -685,7 +686,7 @@ function CredentialRow({ title, subtitle, status, hasValue, children }) {
   );
 }
 
-export default function SettingsView({ settings, setSetting, onSave, theme, onThemeChange, agentLabel }) {
+export default function SettingsView({ settings, setSetting, onSave, theme, onThemeChange, skin, onSkinChange, customTheme, onCustomThemeChange, agentLabel }) {
   const [saved, setSaved] = useState(false);
   const [validation, setValidation] = useState(null);
   const [testing, setTesting] = useState(false);
@@ -1572,6 +1573,85 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
                   ]}
                 />
               </Section>
+              <Section title="Style" subtitle="Normal, 8-Bit, or design your own with Custom. Combines with light and dark.">
+                <Segmented
+                  value={normalizeSkin(skin)}
+                  onChange={(v) => onSkinChange?.(v)}
+                  groupLabel="Style"
+                  options={SKINS.map((s) => ({
+                    value: s.id,
+                    label: s.icon && Ico[s.icon]
+                      ? (<span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>{Ico[s.icon](13)} {s.label}</span>)
+                      : s.label,
+                    ariaLabel: `${s.label} style`,
+                    title: s.title,
+                  }))}
+                />
+              </Section>
+              {normalizeSkin(skin) === 'custom' && customTheme && (
+                <>
+                  <Section title="Accent color" subtitle="Buttons, highlights, focus — the brand color of your theme.">
+                    <input
+                      type="color"
+                      value={customTheme.accent}
+                      onChange={(e) => onCustomThemeChange?.({ ...customTheme, accent: e.target.value })}
+                      aria-label="Custom accent color"
+                      style={{ width: 64, height: 32, padding: 2, border: '1px solid var(--line-2)', borderRadius: 6, background: 'var(--surface)', cursor: 'pointer' }}
+                    />
+                  </Section>
+                  <Section title="Background" subtitle="Pick a base color — surfaces and text shades derive from it — or follow the Light/Dark theme.">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <input
+                        type="color"
+                        value={customTheme.bg || (theme === 'light' ? '#fafafa' : '#080d18')}
+                        onChange={(e) => onCustomThemeChange?.({ ...customTheme, bg: e.target.value })}
+                        disabled={customTheme.bg === null}
+                        aria-label="Custom background color"
+                        style={{ width: 64, height: 32, padding: 2, border: '1px solid var(--line-2)', borderRadius: 6, background: 'var(--surface)', cursor: 'pointer', opacity: customTheme.bg === null ? 0.45 : 1 }}
+                      />
+                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--text-muted)', cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={customTheme.bg === null}
+                          onChange={(e) => onCustomThemeChange?.({ ...customTheme, bg: e.target.checked ? null : (theme === 'light' ? '#fafafa' : '#080d18') })}
+                        />
+                        Follow Light/Dark
+                      </label>
+                    </div>
+                  </Section>
+                  <Section title="Corners" subtitle="How sharp the surfaces feel.">
+                    <Segmented
+                      value={String(customTheme.radius)}
+                      onChange={(v) => onCustomThemeChange?.({ ...customTheme, radius: Number(v) })}
+                      groupLabel="Corner radius"
+                      options={[
+                        { value: '0', label: 'Square', ariaLabel: 'Square corners', title: 'Sharp pixel corners.' },
+                        { value: '6', label: 'Soft', ariaLabel: 'Soft corners', title: 'Gently rounded.' },
+                        { value: '12', label: 'Round', ariaLabel: 'Round corners', title: 'Fully rounded.' },
+                      ]}
+                    />
+                  </Section>
+                  <Section title="Typeface" subtitle="Standard UI font, or mono everywhere for the terminal feel.">
+                    <Segmented
+                      value={customTheme.font}
+                      onChange={(v) => onCustomThemeChange?.({ ...customTheme, font: v })}
+                      groupLabel="Custom typeface"
+                      options={[
+                        { value: 'standard', label: 'Standard', ariaLabel: 'Standard font', title: 'Inter for UI text.' },
+                        { value: 'mono', label: 'Mono', ariaLabel: 'Mono font', title: 'JetBrains Mono everywhere.' },
+                      ]}
+                    />
+                  </Section>
+                  <Section title="Scanlines" subtitle="A faint CRT scanline overlay across the app.">
+                    <Toggle
+                      value={customTheme.scanlines}
+                      onChange={(v) => onCustomThemeChange?.({ ...customTheme, scanlines: v })}
+                      title="Toggle the CRT scanline overlay."
+                      ariaLabel="Scanline overlay"
+                    />
+                  </Section>
+                </>
+              )}
               <Section title="Greeting" subtitle="The line shown when you start a new task.">
                 <TextInput
                   value={settings.greeting}
@@ -1750,7 +1830,7 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
                     </CredentialRow>
                     <CredentialRow
                       title="Minds URL"
-                      subtitle="Base URL for Minds-backed Minds Cowork features."
+                      subtitle="Base URL for Minds-backed MindsHub Cowork features."
                       status={relevance.mindsUrl}
                       hasValue={has('mindsUrl')}
                     >
@@ -1886,7 +1966,7 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
               <CollapsibleGroup title="Account" defaultOpen={false}>
                 <Section
                   title="Sign out"
-                  subtitle="Disconnect from MindsHub and remove every stored credential on this device. Anton will return to the onboarding flow on the next launch."
+                  subtitle="Disconnect from MindsHub and remove every stored credential on this device. Cowork will return to the onboarding flow on the next launch."
                 >
                   <button
                     type="button"
@@ -1922,8 +2002,8 @@ export default function SettingsView({ settings, setSetting, onSave, theme, onTh
 
         <ConfirmModal
           open={logoutConfirmOpen}
-          title="Sign out of Anton?"
-          message="This clears your stored API keys and disconnects from MindsHub. You'll need to sign in again to keep using Anton."
+          title="Sign out of Cowork?"
+          message="This clears your stored API keys and disconnects from MindsHub. You'll need to sign in again to keep using Cowork."
           confirmLabel="Sign out"
           cancelLabel="Cancel"
           destructive

@@ -20,9 +20,11 @@ import { createRoot } from 'react-dom/client';
 import { ReactKeycloakProvider } from '@react-keycloak/web';
 import './cowork/styles/tailwind.css';
 import './cowork/styles/globals.css';
+import './cowork/styles/skin-8bit.css';
 import './styles.css';
 import App from './App';
 import { keycloak, scheduleWebTokenRefresh } from './lib/keycloak';
+import { loadSkin } from './lib/skins';
 import { host } from './platform/host';
 
 // Cloud-hosted instances are accessed via the Cloudflare Worker, which
@@ -41,6 +43,7 @@ const isCloudHosted = (() => {
     if (saved === 'light' || saved === 'dark') theme = saved;
   } catch {}
   document.body.dataset.theme = theme;
+  document.body.dataset.skin = loadSkin();
   document.body.classList.add(theme === 'light' ? 'gf-theme-light' : 'gf-theme-dark');
 })();
 

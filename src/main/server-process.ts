@@ -14,7 +14,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { app } from 'electron';
 
-const DEFAULT_PORT = 26866; // ANTON on T9 keypad
+const DEFAULT_PORT = 26866; // legacy port (ANTON on T9 keypad)
 const SERVER_HOST = '127.0.0.1';
 
 let serverProcess: ChildProcess | null = null;
@@ -133,7 +133,7 @@ function getUvPath(): string | null {
 }
 
 // Build a PATH with ~/.local/bin and ~/.cargo/bin prepended. Critical
-// for macOS (and to a lesser extent Linux) GUI launches: when Minds Cowork.app
+// for macOS (and to a lesser extent Linux) GUI launches: when MindsHub Cowork.app
 // starts from Finder/Dock, process.env.PATH is the minimal launchd PATH
 // (`/usr/bin:/bin:/usr/sbin:/sbin`) — shell init files aren't read,
 // so `~/.local/bin` (where the installer puts `uv`) is missing.
@@ -222,10 +222,13 @@ export async function startServer(opts: { port?: number; readyTimeoutMs?: number
     return { ok: true, port: serverPort };
   }
 
-  // 15s is plenty for a normal boot (typically <2s). Updates are now
-  // handled by the Electron-side server-updater after the server is
-  // already serving, so no need for a long timeout here.
-  const readyTimeoutMs = opts.readyTimeoutMs ?? 15000;
+  // 15s is plenty for a normal packaged boot (typically <2s). Dev mode
+  // runs `uv run` against the sibling source dir, and the FIRST boot
+  // builds a fresh .venv — resolving and downloading the dependency
+  // tree can take a couple of minutes on a cold cache, so give it room.
+  const devServerDir = getDevServerDir();
+  const isDevSource = Boolean(devServerDir && fs.existsSync(path.join(devServerDir, 'pyproject.toml')));
+  const readyTimeoutMs = opts.readyTimeoutMs ?? (isDevSource ? 180_000 : 15000);
 
   lastStartAt = Date.now();
   // A new start attempt invalidates the prior stop attribution —
@@ -239,12 +242,12 @@ export async function startServer(opts: { port?: number; readyTimeoutMs?: number
   // Determine how to spawn the server:
   //   Dev mode:  `uv run cowork-server` from the sibling source dir
   //   Packaged:  run the installed `cowork-server` binary directly
-  const devDir = getDevServerDir();
+  const devDir = devServerDir;
   let spawnCmd: string;
   let spawnArgs: string[];
   let spawnCwd: string | undefined;
 
-  if (devDir && fs.existsSync(path.join(devDir, 'pyproject.toml'))) {
+  if (isDevSource && devDir) {
     // Dev: use uv to run from source so local edits are picked up
     const uvCmd = getUvPath();
     if (!uvCmd) {
