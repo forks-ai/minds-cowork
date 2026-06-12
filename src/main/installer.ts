@@ -476,6 +476,7 @@ export async function runInstaller(win: BrowserWindow, opts?: InstallerOptions):
       'tool', 'install',
       COWORK_SERVER_PACKAGE,
       '--force', '--reinstall',
+      '--python', '>=3.12,<3.14',
     ];
 
     /*
