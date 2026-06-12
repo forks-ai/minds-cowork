@@ -6,7 +6,7 @@ import * as https from 'https';
 import * as http from 'http';
 import { IPC } from '../shared/ipc-channels';
 import { checkInstallStatus, runInstaller } from './installer';
-import { startServer, stopServer, isServerRunning, isServerStarting, getServerPort, getServerDiagnostics } from './server-process';
+import { startServer, stopServer, isServerRunning, isServerStarting, getServerPort, getServerDiagnostics, getServerLogPath } from './server-process';
 import { maybeUpdateServer, setUpdateNotifier } from './server-updater';
 import { oauthConnect, cancelCurrentOAuth } from './oauth-service';
 import { saveTokens, getAccessToken, getRefreshToken, clearTokens } from './token-store';
@@ -738,57 +738,103 @@ function setupIPC() {
 }
 
 app.whenReady().then(() => {
-  if (process.platform === 'darwin') {
+  const isMac = process.platform === 'darwin';
+
+  if (isMac) {
     const dockIcon = nativeImage.createFromPath(getIconPath());
     app.dock?.setIcon(dockIcon);
-
-    const template: Electron.MenuItemConstructorOptions[] = [
-      {
-        label: app.name,
-        submenu: [
-          {
-            label: 'About MindsHub Cowork',
-            click: () => {
-              const uiVersion = getCachedVersion();
-              const versionStr = uiVersion
-                ? `${app.getVersion()} (UI: ${uiVersion})`
-                : app.getVersion();
-              app.setAboutPanelOptions({
-                applicationName: 'MindsHub Cowork',
-                applicationVersion: versionStr,
-                copyright: 'By MindsDB',
-                credits: 'Autonomous AI Coworker\nhttps://mindsdb.com',
-              });
-              app.showAboutPanel();
-            },
-          },
-          { type: 'separator' },
-          { role: 'services' },
-          { type: 'separator' },
-          { role: 'hide' },
-          { role: 'hideOthers' },
-          { role: 'unhide' },
-          { type: 'separator' },
-          { role: 'quit' },
-        ],
-      },
-      { role: 'editMenu' },
-      {
-        label: 'View',
-        submenu: [
-          { role: 'reload' },
-          { role: 'forceReload' },
-          { role: 'toggleDevTools' },
-          { role: 'togglefullscreen' },
-          { role: 'zoomIn' },
-          { role: 'zoomOut' },
-          { role: 'resetZoom' },
-        ],
-      },
-      { role: 'windowMenu' },
-    ];
-    Menu.setApplicationMenu(Menu.buildFromTemplate(template));
   }
+
+  /* Wording matches each platform's file manager so the label isn't a
+     lie on Windows/Linux. The action (shell.showItemInFolder) is the
+     same everywhere. */
+  const revealLogsLabel = isMac
+    ? 'Reveal Logs in Finder'
+    : process.platform === 'win32'
+      ? 'Show Logs in Explorer'
+      : 'Show Logs in File Manager';
+
+  /* Built on every platform so Windows/Linux users also get the Help
+     menu (Documentation + log access). The macOS-only app-name submenu
+     leads the bar on Mac; elsewhere a minimal File menu carries Quit,
+     which the app menu would otherwise have owned. */
+  const template: Electron.MenuItemConstructorOptions[] = [
+    ...(isMac
+      ? [{
+          label: app.name,
+          submenu: [
+            {
+              label: 'About MindsHub Cowork',
+              click: () => {
+                const uiVersion = getCachedVersion();
+                const versionStr = uiVersion
+                  ? `${app.getVersion()} (UI: ${uiVersion})`
+                  : app.getVersion();
+                app.setAboutPanelOptions({
+                  applicationName: 'MindsHub Cowork',
+                  applicationVersion: versionStr,
+                  copyright: 'By MindsDB',
+                  credits: 'Autonomous AI Coworker\nhttps://mindsdb.com',
+                });
+                app.showAboutPanel();
+              },
+            },
+            { type: 'separator' },
+            { role: 'services' },
+            { type: 'separator' },
+            { role: 'hide' },
+            { role: 'hideOthers' },
+            { role: 'unhide' },
+            { type: 'separator' },
+            { role: 'quit' },
+          ],
+        } as Electron.MenuItemConstructorOptions]
+      : [{ role: 'fileMenu' } as Electron.MenuItemConstructorOptions]),
+    { role: 'editMenu' },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { role: 'togglefullscreen' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { role: 'resetZoom' },
+      ],
+    },
+    { role: 'windowMenu' },
+    {
+      role: 'help',
+      submenu: [
+        {
+          label: 'Anton Cowork Documentation',
+          click: () => {
+            shell.openExternal('https://docs.mindsdb.com');
+          },
+        },
+        { type: 'separator' },
+        {
+          label: revealLogsLabel,
+          click: () => {
+            /* showItemInFolder needs the file to exist; before the server
+               has ever started there's no log yet, so fall back to opening
+               the logs directory itself. getServerLogPath() is now a pure
+               getter, so ensure the directory exists before opening it. */
+            const logPath = getServerLogPath();
+            if (fs.existsSync(logPath)) {
+              shell.showItemInFolder(logPath);
+            } else {
+              const logDir = path.dirname(logPath);
+              fs.mkdirSync(logDir, { recursive: true });
+              shell.openPath(logDir);
+            }
+          },
+        },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 
   ensureDefaultProject();
   setupIPC();
