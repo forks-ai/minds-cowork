@@ -351,7 +351,20 @@ export default function OnboardingScreen({
     const loginResult = await host.mindshubLogin();
     if (!loginResult.ok) {
       setPhase('error');
-      setErrorMsg('Sign in cancelled or failed. Please try again.');
+      const reason = String(loginResult.reason || '');
+      const reloadKey = host.isMac() ? 'Cmd+R' : 'Ctrl+R';
+      if (/timed out/i.test(reason)) {
+        // The loopback callback never arrived — usually the sign-in
+        // happened in a STALE browser tab from an earlier app launch
+        // (the callback port changes every launch).
+        setErrorMsg(
+          `Sign-in timed out — the browser never finished authorizing. Try again and complete the newest tab it opens (close any older "You're authorized" tabs), or press ${reloadKey} to reload.`,
+        );
+      } else if (/cancelled/i.test(reason)) {
+        setErrorMsg('Sign-in was cancelled. Press SIGN IN WITH MINDSHUB to try again.');
+      } else {
+        setErrorMsg(reason || 'Sign in failed. Please try again.');
+      }
       return;
     }
     const finalizeResult = await host.mindshubFinalize();
