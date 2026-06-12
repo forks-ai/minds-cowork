@@ -554,7 +554,7 @@ const MINDS_KEYS = [
 // from the LLM gateway. ANTON_OPENAI_BASE_URL is required because
 // checkConfigured() demands it alongside ANTON_OPENAI_API_KEY. The
 // live MindsHub gateway now expects the `latest:*` alias namespace;
-// the older `_reason_` / `_code_` sentinels 500 with "Mind not found".
+// the older deprecated sentinel aliases 500 with "Mind not found".
 export async function writeMindsKeyToEnvAndRestart(apiKey: string): Promise<void> {
   const antonDir = path.join(os.homedir(), '.anton');
   // ~/.anton normally exists by the time SSO finalize runs (the server

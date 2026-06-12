@@ -7,7 +7,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { host } from '../../platform/host';
-import { BASE } from '../../cowork/api';
+import { BASE, fetchRecommendedModels } from '../../cowork/api';
 import { PROVIDER_MODELS } from '../../cowork/lib/settingsTransform';
 import { MINDS_API_BASE, MINDS_REGISTER_URL } from '../../lib/mindsUrls';
 import { syncSettingsToDb } from '../../lib/syncSettings';
@@ -25,6 +25,27 @@ const GEMINI_MODELS = PROVIDER_MODELS.gemini;
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
 
 const CUSTOM_MODEL = '__custom__';
+
+// Last-resort MindsHub model, used only if the backend returns nothing. We
+// avoid maintaining model names in this repo, but a single safe fallback is
+// worth it: the validator's generic openai-compatible default is not served
+// by MindsHub. `latest:*` is a stable alias, not a pinned version, so it
+// won't drift. The backend's own default (apply_model_defaults) is the real
+// source — this only guards a failed `/recommended-models` fetch.
+const FALLBACK_MINDS_MODEL = 'latest:sonnet';
+
+/**
+ * The model to probe MindsHub LLM availability with, sourced from the
+ * backend's recommended minds-cloud (planning, coding) pair. Returns the
+ * coding model, falling back to planning, then to FALLBACK_MINDS_MODEL if the
+ * backend is unreachable — never undefined, so the probe always sends a
+ * MindsHub-served model rather than the validator's generic default.
+ */
+async function mindsProbeModel(): Promise<string> {
+  const rec = await fetchRecommendedModels();
+  const pair = rec?.recommendedPair?.['minds-cloud'];
+  return pair?.[1] || pair?.[0] || FALLBACK_MINDS_MODEL;
+}
 
 /** Persist the cartridge choice as the `harness` setting (best-effort). */
 async function syncHarness(harnessId: string): Promise<void> {
@@ -208,20 +229,24 @@ export default function OnboardingScreen({
         `ANTON_MINDS_URL=${mindsBase}`,
       ];
 
+      // The probe model is the backend's recommended minds-cloud coding
+      // model — fetched, never hardcoded here, so model names live only in
+      // cowork-server.
       const llmResult = await host.validateProvider(
         'openai-compatible',
         apiKey.trim(),
         `${mindsBase}/v1`,
-        '_code_'
+        await mindsProbeModel()
       );
 
       if (llmResult.ok) {
+        // Set only the provider; the backend resolves the default
+        // planning/coding model on load and reports it back to the UI
+        // (apply_model_defaults), so we never write model names.
         const lines = [
           ...mindsLines,
           'ANTON_PLANNING_PROVIDER=minds-cloud',
           'ANTON_CODING_PROVIDER=minds-cloud',
-          'ANTON_PLANNING_MODEL=_reason_',
-          'ANTON_CODING_MODEL=_code_',
         ];
         await saveFinal(lines);
       } else {
@@ -321,14 +346,13 @@ export default function OnboardingScreen({
       setErrorMsg(finalizeResult.reason || 'Failed to set up MindsHub. Please try again.');
       return;
     }
+    // Provider only — the backend resolves the default model on load.
     const lines = [
       'ANTON_TERMS_CONSENT=true',
       'ANTON_MINDS_ENABLED=true',
       'ANTON_MINDS_URL=https://api.mindshub.ai',
       'ANTON_PLANNING_PROVIDER=minds-cloud',
       'ANTON_CODING_PROVIDER=minds-cloud',
-      'ANTON_PLANNING_MODEL=latest:sonnet',
-      'ANTON_CODING_MODEL=latest:haiku',
     ];
     if (finalizeResult.apiKey) {
       lines.push(`ANTON_MINDS_API_KEY=${finalizeResult.apiKey}`);
@@ -350,14 +374,13 @@ export default function OnboardingScreen({
     let cancelled = false;
     import('../../lib/keycloak').then(({ keycloak }) => {
       if (cancelled || finalizedRef.current || !keycloak.authenticated) return;
+      // Provider only — the backend resolves the default model on load.
       saveFinal([
         'ANTON_TERMS_CONSENT=true',
         'ANTON_MINDS_ENABLED=true',
         'ANTON_MINDS_URL=https://api.mindshub.ai',
         'ANTON_PLANNING_PROVIDER=minds-cloud',
         'ANTON_CODING_PROVIDER=minds-cloud',
-        'ANTON_PLANNING_MODEL=latest:sonnet',
-        'ANTON_CODING_MODEL=latest:haiku',
       ]);
     });
     return () => { cancelled = true; };

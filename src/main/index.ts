@@ -200,7 +200,7 @@ async function validateOpenAICompatible(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: model || 'gpt-4o',
+        model: model || 'gpt-5.5',
         messages: [{ role: 'user', content: 'ping' }],
       }),
     });
