@@ -3,7 +3,7 @@
    █ ▀ █ █ █ ▀█ █▄▀ ▄█   █▄▄ █▄█ ▀▄▀▄▀ █▄█ █▀▄ █ █
 ```
 
-# MindsHub Cowork
+# MindsHub Cowork - FRONTEND
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/mindsdb/cowork)
 

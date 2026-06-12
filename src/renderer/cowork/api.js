@@ -236,18 +236,28 @@ export async function fetchSession(id) {
   }
 }
 
-/** 
- * Matches server `conversation_manager._new_conversation_id` (UTC) so client can upload before the first stream. 
- * This is required especially when the user uploads files before the first stream, so the server can assign the files to the correct conversation.
-*/
+/**
+ * Pre-allocates the id for a conversation that doesn't exist yet, so
+ * attachments can be uploaded against it before the first stream. The
+ * server adopts a client-supplied UUID as the conversation's real id
+ * (ENG-264) — the old timestamp format here predated the DB-backed
+ * server and made it create a different id, stranding the uploads.
+ */
 export function allocateConversationId() {
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, '0');
-  const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}_${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;
-  const hex = typeof crypto !== 'undefined' && crypto.getRandomValues
-    ? Array.from(crypto.getRandomValues(new Uint8Array(3)), (b) => b.toString(16).padStart(2, '0')).join('')
-    : Math.random().toString(16).slice(2, 8);
-  return `${stamp}_${hex}`;
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  // randomUUID is gated to secure contexts, but getRandomValues isn't —
+  // assemble an RFC-4122 v4 UUID from raw bytes so the server can still
+  // adopt the id (and CodeQL doesn't flag a Math.random in the id flow).
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    const b = crypto.getRandomValues(new Uint8Array(16));
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  }
+  // No crypto at all (not a real Electron/browser case): the server
+  // can't adopt a non-UUID id but re-links the uploads it covers.
+  return `${Date.now().toString(36)}-${(typeof performance !== 'undefined' ? Math.floor(performance.now() * 1e6) : 0).toString(36)}`;
 }
 
 // Streams a /v1/responses request. Maps OpenAI-style typed events to the
@@ -592,6 +602,18 @@ export async function unpublishArtifact(path) {
   return res.json();
 }
 
+export async function deleteArtifact(path) {
+  const res = await fetch(BASE + `/artifacts/?path=${encodeURIComponent(path)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    let detail = '';
+    try { detail = (await res.json())?.detail || ''; } catch {}
+    throw new Error(detail || `Delete failed (${res.status})`);
+  }
+  return { status: 'deleted' };
+}
+
 // Delete a project by object (with id) or name string.
 export async function deleteProject(projectOrName) {
   let id = projectOrName?.id;
@@ -798,7 +820,7 @@ export async function fetchArtifacts({ projectPath } = {}) {
   // fetch don't share an in-flight promise.
   return dedupe(`artifacts${suffix}`, async () => {
     try {
-      return await req(`/artifacts${suffix}`);
+      return await req(`/artifacts/${suffix}`);
     } catch {
       return [];
     }
@@ -1316,6 +1338,108 @@ export async function publishArtifact(path, password) {
 
 export async function fetchBrowseStatus() {
   return req('/browse/status');
+}
+
+// ─── Channels ───────────────────────────────────────────────────────────────
+// Wraps /api/v1/channels/* on cowork-server. Plugins advertise a credential
+// schema + capability flags so the UI knows which fields/buttons to render;
+// secrets are masked on read (is_set / value:null) and only sent on write.
+
+export async function fetchChannelPlugins() {
+  try {
+    const data = await req('/channels/plugins');
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchChannelStatus() {
+  try {
+    return await req('/channels/status');
+  } catch {
+    return { plugin_count: 0, installation_count: 0, channels: [] };
+  }
+}
+
+export async function fetchChannelInstallations() {
+  try {
+    const data = await req('/channels/installations');
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+// The harness that serves channel conversations (separate from the desktop
+// harness). Returns the current value plus the registered options.
+export async function fetchChannelAgent() {
+  try {
+    return await req('/channels/agent');
+  } catch {
+    return { harness: '', options: [] };
+  }
+}
+
+export async function setChannelAgent(harness) {
+  return req('/channels/agent', { method: 'PUT', body: JSON.stringify({ harness }) });
+}
+
+export async function fetchChannelConfig(channelType) {
+  return req(`/channels/${enc(channelType)}/config`);
+}
+
+export async function saveChannelConfig(channelType, values) {
+  return req(`/channels/${enc(channelType)}/config`, {
+    method: 'PUT',
+    body: JSON.stringify({ values: values || {} }),
+  });
+}
+
+export async function deleteChannelConfig(channelType) {
+  return req(`/channels/${enc(channelType)}/config`, { method: 'DELETE' });
+}
+
+// Rebuild the live adapter from stored config (no webhook registration).
+export async function reloadChannel(channelType) {
+  return req(`/channels/${enc(channelType)}/reload`, { method: 'POST' });
+}
+
+// Register the channel's inbound endpoint with the platform (Telegram setWebhook).
+// 501 when the channel has no lifecycle (gate on capabilities.supports_webhook_setup).
+export async function setupChannel(channelType) {
+  return req(`/channels/${enc(channelType)}/setup`, { method: 'POST' });
+}
+
+export async function teardownChannel(channelType) {
+  return req(`/channels/${enc(channelType)}/teardown`, { method: 'POST' });
+}
+
+// ── Channel bindings (wire an external chat/thread to a project/conversation) ──
+
+export async function fetchChannelBindings(channelType) {
+  const suffix = channelType ? `?channel_type=${enc(channelType)}` : '';
+  try {
+    const data = await req(`/channels/bindings${suffix}`);
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function createChannelBinding(payload) {
+  return req('/channels/bindings', { method: 'POST', body: JSON.stringify(payload || {}) });
+}
+
+export async function updateChannelBinding(bindingId, patch) {
+  return req(`/channels/bindings/${enc(bindingId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch || {}),
+  });
+}
+
+export async function deleteChannelBinding(bindingId) {
+  return req(`/channels/bindings/${enc(bindingId)}`, { method: 'DELETE' });
 }
 
 // ─── Attachments And Context ───────────────────────────────────────────────
