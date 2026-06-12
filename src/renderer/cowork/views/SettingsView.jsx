@@ -4,7 +4,7 @@ import { validateSettings, revealSettingKey, testProviders, fetchHealth } from '
 import { providerTypeToKeyField, providerValueToType } from '../lib/settingsTransform';
 import { ConfirmModal } from '../components/ConfirmModal';
 import { host } from '../../platform/host';
-import { MINDS_API_KEY_URL } from '../../pages/onboarding/constants';
+import { MINDS_API_KEY_URL } from '../../lib/mindsUrls';
 import { getUIVersion, isElectron } from '../../platform/host';
 
 // Provider preset → underlying canonical fields. The Settings UI uses

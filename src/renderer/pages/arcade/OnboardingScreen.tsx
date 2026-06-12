@@ -9,6 +9,7 @@ import { useState, useEffect, useRef } from 'react';
 import { host } from '../../platform/host';
 import { BASE } from '../../cowork/api';
 import { PROVIDER_MODELS } from '../../cowork/lib/settingsTransform';
+import { MINDS_API_BASE, MINDS_REGISTER_URL } from '../../lib/mindsUrls';
 import { ArcadeShell, PixelMarquee } from './components';
 import { PixelSprite, type SpriteName } from './sprites';
 
@@ -21,9 +22,6 @@ const OPENAI_MODELS = PROVIDER_MODELS.openai;
 const GEMINI_MODELS = PROVIDER_MODELS.gemini;
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
-const KEYCLOAK_URL = import.meta.env.VITE_KEYCLOAK_URL || 'https://auth.mindshub.ai/auth';
-const KEYCLOAK_BASE = KEYCLOAK_URL.replace('/auth', '');
-const MINDS_API_URL = import.meta.env.VITE_MINDS_API_URL || 'https://api.mindshub.ai';
 
 const CUSTOM_MODEL = '__custom__';
 
@@ -177,7 +175,7 @@ export default function OnboardingScreen({
   const [customModel, setCustomModel] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [llmApiKey, setLlmApiKey] = useState('');
-  const [mindsUrl] = useState(MINDS_API_URL);
+  const [mindsUrl] = useState(MINDS_API_BASE);
   const [customBaseUrl, setCustomBaseUrl] = useState('');
   const [phase, setPhase] = useState<Phase>('choose');
   const [errorMsg, setErrorMsg] = useState('');
@@ -612,7 +610,7 @@ export default function OnboardingScreen({
                 <button
                   type="button"
                   className="arc-link"
-                  onClick={() => host.openExternal(`${KEYCLOAK_BASE}/auth/realms/mindsdb/account`)}
+                  onClick={() => host.openExternal(MINDS_REGISTER_URL)}
                 >Insert coin — first week free →</button>
               </div>
             </>
@@ -645,7 +643,7 @@ export default function OnboardingScreen({
                 <button
                   type="button"
                   className="arc-link"
-                  onClick={() => host.openExternal(`${KEYCLOAK_BASE}/auth/realms/mindsdb/account`)}
+                  onClick={() => host.openExternal(MINDS_REGISTER_URL)}
                 >Insert coin — first week free →</button>
               </div>
             </>

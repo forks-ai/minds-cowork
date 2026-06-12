@@ -1,5 +1,5 @@
 // Title screen — the first thing a brand-new user sees (plays only
-// until terms are accepted, same gate as the old IntroSequence).
+// until terms are accepted, then never again).
 //
 //   1. CRT power-on flash (700ms)
 //   2. "MINDSDB PRESENTS" typewriter
