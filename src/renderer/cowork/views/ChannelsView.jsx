@@ -1,7 +1,9 @@
 // `<ChannelsView>` — connect messaging channels (Telegram/Slack/Discord/
-// WhatsApp) to the agent. One card per plugin; capability flags from the
-// server decide which fields/buttons render. Secrets are masked on read
-// (is_set / value:null) and only sent when the operator types a new value.
+// WhatsApp) to the agent. Master–detail layout: a left rail lists the
+// channels with their status, the right pane shows the selected channel's
+// credentials plus its routes. Capability flags from the server decide which
+// fields/buttons render. Secrets are masked on read (is_set / value:null) and
+// only sent when the operator types a new value.
 //
 // Connect flow: save credentials, then `setup` when the channel supports
 // webhook registration (Telegram), otherwise `reload` to bring the live
@@ -226,6 +228,7 @@ export default function ChannelsView() {
   const [plugins, setPlugins] = useState([]);
   const [statusByType, setStatusByType] = useState({});
   const [loading, setLoading] = useState(true);
+  const [selectedType, setSelectedType] = useState(null);
 
   async function refresh() {
     const [pl, st] = await Promise.all([fetchChannelPlugins(), fetchChannelStatus()]);
@@ -235,6 +238,10 @@ export default function ChannelsView() {
   }
   useEffect(() => { refresh(); }, []);
 
+  // Fall back to the first plugin so the detail pane is never empty once the
+  // list loads; an explicit click overrides it.
+  const selected = plugins.find((p) => p.channel_type === selectedType) || plugins[0] || null;
+
   return (
     <div className="channels-view">
       <header className="channels-top">
@@ -243,29 +250,58 @@ export default function ChannelsView() {
           {Ico.refresh(15)}
         </button>
       </header>
-      <main className="channels-content scroll-clean">
+      <div className="channels-lede">
         <p className="channels-intro">
           Connect a messaging app so people can talk to the agent from their chats.
         </p>
         <ChannelAgentSelect />
-        {loading ? (
-          <p className="channels-muted">Loading channels…</p>
-        ) : plugins.length === 0 ? (
-          <p className="channels-muted">No channels available. Is the server running?</p>
-        ) : (
-          <div className="channels-grid">
-            {plugins.map((p) => (
-              <ChannelCard
-                key={p.channel_type}
-                plugin={p}
-                status={statusByType[p.channel_type]}
-                onChanged={refresh}
-              />
-            ))}
-          </div>
-        )}
-        {!loading && plugins.length > 0 ? <ChannelBindings plugins={plugins} /> : null}
-      </main>
+      </div>
+      {loading ? (
+        <p className="channels-muted channels-pad">Loading channels…</p>
+      ) : plugins.length === 0 ? (
+        <p className="channels-muted channels-pad">No channels available. Is the server running?</p>
+      ) : (
+        <main className="channels-body">
+          <nav className="channels-list scroll-clean" aria-label="Channels">
+            {plugins.map((p) => {
+              const st = statusByType[p.channel_type];
+              const isSelected = p.channel_type === selected?.channel_type;
+              return (
+                <button
+                  key={p.channel_type}
+                  type="button"
+                  className={`channels-list-item${isSelected ? ' is-active' : ''}`}
+                  aria-current={isSelected || undefined}
+                  onClick={() => setSelectedType(p.channel_type)}
+                >
+                  <span className="channels-list-name">
+                    {p.display_name}
+                    <code className="channels-type">{p.channel_type}</code>
+                  </span>
+                  <StatusBadge active={st?.status === 'active'} configured={st?.configured} />
+                </button>
+              );
+            })}
+          </nav>
+          <section className="channels-detail scroll-clean">
+            {selected ? (
+              <>
+                <ChannelCard
+                  key={selected.channel_type}
+                  plugin={selected}
+                  status={statusByType[selected.channel_type]}
+                  onChanged={refresh}
+                />
+                <ChannelBindings
+                  key={`routes-${selected.channel_type}`}
+                  plugins={plugins}
+                  channelType={selected.channel_type}
+                />
+              </>
+            ) : null}
+          </section>
+        </main>
+      )}
     </div>
   );
 }
