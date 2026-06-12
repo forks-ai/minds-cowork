@@ -707,19 +707,6 @@ function setupIPC() {
     }
   });
 
-  // Move a local file/folder to the OS Trash. Recoverable from the
-  // user's Trash/Recycle Bin — used by the artifact viewer's Delete
-  // action so an accidental click is undoable.
-  ipcMain.handle('shell:trash-item', async (_event, p: string) => {
-    if (typeof p !== 'string' || !p) return { ok: false, reason: 'empty path' };
-    try {
-      await shell.trashItem(p);
-      return { ok: true };
-    } catch (e: any) {
-      return { ok: false, reason: e?.message || String(e) };
-    }
-  });
-
   ipcMain.handle(IPC.APP_UI_VERSION, async () => {
     const uiVersion = getCachedVersion();
     return {

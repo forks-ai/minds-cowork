@@ -10,7 +10,7 @@
 //
 // Web fallbacks are intentionally narrow: methods that have a sensible
 // browser equivalent (openExternal → window.open) work; OS-level shell
-// operations (openPath, trashItem) return { ok: false, reason: 'unsupported' }
+// operations (openPath) return { ok: false, reason: 'unsupported' }
 // so call sites can branch / hide affordances.
 
 const ANTON_SERVER_PORT = 26866;
@@ -173,13 +173,6 @@ export async function openPath(path: string): Promise<{ ok: boolean; reason?: st
 export async function showItemInFolder(path: string): Promise<{ ok: boolean; reason?: string }> {
   if (isElectron && typeof bridge.showItemInFolder === 'function') {
     return bridge.showItemInFolder(path);
-  }
-  return { ok: false, reason: 'unsupported' };
-}
-
-export async function trashItem(path: string): Promise<{ ok: boolean; reason?: string }> {
-  if (isElectron && typeof bridge.trashItem === 'function') {
-    return bridge.trashItem(path);
   }
   return { ok: false, reason: 'unsupported' };
 }
@@ -499,7 +492,6 @@ export const host = {
   openExternal,
   openPath,
   showItemInFolder,
-  trashItem,
   getPathForFile,
   getUIVersion,
   readSettings,

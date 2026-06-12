@@ -602,6 +602,18 @@ export async function unpublishArtifact(path) {
   return res.json();
 }
 
+export async function deleteArtifact(path) {
+  const res = await fetch(BASE + `/artifacts/?path=${encodeURIComponent(path)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    let detail = '';
+    try { detail = (await res.json())?.detail || ''; } catch {}
+    throw new Error(detail || `Delete failed (${res.status})`);
+  }
+  return { status: 'deleted' };
+}
+
 // Delete a project by object (with id) or name string.
 export async function deleteProject(projectOrName) {
   let id = projectOrName?.id;
@@ -808,7 +820,7 @@ export async function fetchArtifacts({ projectPath } = {}) {
   // fetch don't share an in-flight promise.
   return dedupe(`artifacts${suffix}`, async () => {
     try {
-      return await req(`/artifacts${suffix}`);
+      return await req(`/artifacts/${suffix}`);
     } catch {
       return [];
     }
