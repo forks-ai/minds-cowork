@@ -22,6 +22,10 @@ interface InstallerOptions {
 // newer compatible releases automatically.
 const COWORK_SERVER_MIN_VERSION = '0.1.4';
 
+// PyO3 (used by pywinpty on Windows) doesn't support 3.14 yet.
+// Keep in sync with server-updater.ts PYTHON_RANGE and cowork-server requires-python.
+const PYTHON_RANGE = '>=3.12,<3.14';
+
 // Package source for cowork-server. Override with COWORK_SERVER_PACKAGE
 // env var (e.g. a local path or alternative git URL during development).
 const COWORK_SERVER_PACKAGE = process.env.COWORK_SERVER_PACKAGE
@@ -476,7 +480,7 @@ export async function runInstaller(win: BrowserWindow, opts?: InstallerOptions):
       'tool', 'install',
       COWORK_SERVER_PACKAGE,
       '--force', '--reinstall',
-      '--python', '>=3.12,<3.14',
+      '--python', PYTHON_RANGE,
     ];
 
     /*
