@@ -79,6 +79,28 @@ function ChannelAgentSelect() {
   );
 }
 
+// Brand thumb served from the static `logos/` dir (vite public assets). The
+// filename is derived from channel_type, which matches the logo set; if the
+// image is missing the generic chats glyph keeps the row aligned. The white
+// chip behind the mark keeps dark brand colours legible in dark themes.
+function ChannelLogo({ type, size = 26 }) {
+  const [failed, setFailed] = useState(false);
+  return (
+    <span className="channels-logo" style={{ width: size, height: size }} aria-hidden="true">
+      {failed ? Ico.chats(Math.round(size * 0.6)) : (
+        <img
+          src={`logos/${type}.svg`}
+          alt=""
+          width={Math.round(size * 0.62)}
+          height={Math.round(size * 0.62)}
+          draggable={false}
+          onError={() => setFailed(true)}
+        />
+      )}
+    </span>
+  );
+}
+
 function StatusBadge({ active, configured }) {
   const label = active ? 'Active' : configured ? 'Configured' : 'Not connected';
   const tone = active ? 'ok' : configured ? 'warn' : 'idle';
@@ -165,9 +187,12 @@ function ChannelCard({ plugin, status, onChanged }) {
   return (
     <section className="channels-card">
       <header className="channels-card-head">
-        <div>
-          <h2>{plugin.display_name}</h2>
-          <code className="channels-type">{plugin.channel_type}</code>
+        <div className="channels-card-id">
+          <ChannelLogo type={plugin.channel_type} size={32} />
+          <div>
+            <h2>{plugin.display_name}</h2>
+            <code className="channels-type">{plugin.channel_type}</code>
+          </div>
         </div>
         <StatusBadge active={active} configured={configured} />
       </header>
@@ -274,6 +299,7 @@ export default function ChannelsView() {
                   aria-current={isSelected || undefined}
                   onClick={() => setSelectedType(p.channel_type)}
                 >
+                  <ChannelLogo type={p.channel_type} />
                   <span className="channels-list-name">
                     {p.display_name}
                     <code className="channels-type">{p.channel_type}</code>
