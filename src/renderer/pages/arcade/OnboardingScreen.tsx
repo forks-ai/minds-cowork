@@ -10,6 +10,7 @@ import { host } from '../../platform/host';
 import { BASE } from '../../cowork/api';
 import { PROVIDER_MODELS } from '../../cowork/lib/settingsTransform';
 import { MINDS_API_BASE, MINDS_REGISTER_URL } from '../../lib/mindsUrls';
+import { syncSettingsToDb } from '../../lib/syncSettings';
 import { ArcadeShell, PixelMarquee } from './components';
 import { PixelSprite, type SpriteName } from './sprites';
 
@@ -24,59 +25,6 @@ const GEMINI_MODELS = PROVIDER_MODELS.gemini;
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
 
 const CUSTOM_MODEL = '__custom__';
-
-// Env-var names (ANTON_FOO_BAR) → backend setting keys (foo_bar).
-const ENV_TO_SETTING: Record<string, string> = {
-  ANTON_ANTHROPIC_API_KEY: 'anthropic_api_key',
-  ANTON_OPENAI_API_KEY: 'openai_api_key',
-  ANTON_OPENAI_BASE_URL: 'openai_base_url',
-  ANTON_MINDS_API_KEY: 'minds_api_key',
-  ANTON_MINDS_URL: 'minds_url',
-  ANTON_PLANNING_PROVIDER: 'planning_provider',
-  ANTON_CODING_PROVIDER: 'coding_provider',
-  ANTON_PLANNING_MODEL: 'planning_model',
-  ANTON_CODING_MODEL: 'coding_model',
-  ANTON_MEMORY_MODE: 'memory_mode',
-  ANTON_EPISODIC_MEMORY: 'episodic_memory',
-};
-
-/** Push onboarding settings to the cowork-server backend DB. */
-async function syncToBackend(lines: string[]): Promise<void> {
-  // The .env always writes "openai-compatible" for both MindsHub and
-  // generic endpoints; the backend Provider enum distinguishes
-  // "minds_cloud" from "openai_compatible", so map based on whether a
-  // Minds key is present.
-  const envMap: Record<string, string> = {};
-  for (const line of lines) {
-    const eq = line.indexOf('=');
-    if (eq <= 0) continue;
-    envMap[line.slice(0, eq)] = line.slice(eq + 1);
-  }
-  const hasMindKey = Boolean(envMap.ANTON_MINDS_API_KEY);
-
-  for (const [envKey, value] of Object.entries(envMap)) {
-    const settingKey = ENV_TO_SETTING[envKey];
-    if (!settingKey) continue;
-    let dbValue = value;
-    if (settingKey.endsWith('_provider')) {
-      if (dbValue === 'openai-compatible' && hasMindKey) {
-        dbValue = 'minds_cloud';
-      } else {
-        dbValue = dbValue.replace(/-/g, '_');
-      }
-    }
-    try {
-      await fetch(`${BASE}/settings/${encodeURIComponent(settingKey)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value: dbValue }),
-      });
-    } catch {
-      // Best-effort — the .env is the source of truth for the Electron
-      // main process; the backend picks it up on next restart.
-    }
-  }
-}
 
 /** Persist the cartridge choice as the `harness` setting (best-effort). */
 async function syncHarness(harnessId: string): Promise<void> {
@@ -234,7 +182,7 @@ export default function OnboardingScreen({
     lines.push('ANTON_MEMORY_MODE=autopilot');
     lines.push('ANTON_EPISODIC_MEMORY=true');
     await host.saveSettings(lines.join('\n'));
-    await syncToBackend(lines);
+    await syncSettingsToDb(lines);
     await syncHarness(coworker.id);
     setPhase('success');
     setTimeout(onComplete, 2000);
@@ -339,7 +287,7 @@ export default function OnboardingScreen({
     finalizedRef.current = true;
     const lines = Object.entries(merged).map(([k, v]) => `${k}=${v}`);
     await host.saveSettings(lines.join('\n'));
-    await syncToBackend(lines);
+    await syncSettingsToDb(lines);
     await syncHarness(coworker.id);
     setPhase('success');
     setTimeout(onComplete, 2000);
