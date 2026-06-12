@@ -36,7 +36,9 @@ async function req(path, options = {}) {
     } catch {
       detail = await res.text().catch(() => '');
     }
-    throw new Error(detail || `API ${path} returned ${res.status}`);
+    const err = new Error(detail || `API ${path} returned ${res.status}`);
+    err.status = res.status;  // let callers branch on the HTTP code (e.g. 404 fallbacks)
+    throw err;
   }
   if (res.status === 204) return { ok: true };
   return res.json();
@@ -1129,10 +1131,21 @@ export async function matchConnector(query, maxCandidates = 3) {
 // OAuth + service-account flows where the legacy email/password
 // engine would reject the credential shape).
 export async function saveConnector(connectorId, payload) {
-  return req('/connectors/submissions', {
-    method: 'POST',
-    body: JSON.stringify({ connector_id: connectorId, ...(payload || {}) }),
-  });
+  const body = JSON.stringify({ connector_id: connectorId, ...(payload || {}) });
+  try {
+    return await req('/connectors/submissions', { method: 'POST', body });
+  } catch (err) {
+    // TODO: remove this fallback once cowork-server is the only backend.
+    // The new cowork-server serves POST /connectors/submissions; the
+    // legacy local server/main.py only has POST /connectors/{id}/save
+    // with the SAME payload shape (method / name / values). Fall back
+    // ONLY on a 404 (route absent on this backend) — a 400/422/500
+    // means the endpoint exists and rejected us, so surface that as-is
+    // rather than masking it or risking a double-write.
+    if (err?.status !== 404) throw err;
+    console.warn('saveConnector: /connectors/submissions 404 — falling back to legacy /connectors/{id}/save');
+    return req(`/connectors/${encodeURIComponent(connectorId)}/save`, { method: 'POST', body });
+  }
 }
 
 // ─── Web (redirect-based) connector OAuth ──────────────────────────────────
