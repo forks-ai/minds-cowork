@@ -320,6 +320,27 @@ function createWindow() {
     });
   }
 
+  // Right-click editing menu. Electron ships no default context menu, so
+  // without this, right-click → Cut/Copy/Paste does nothing anywhere
+  // (the app menu only provides the keyboard accelerators). Wire a
+  // minimal editing menu for any editable field or text selection so
+  // pasting an API key by right-click works — the onboarding/settings
+  // screens are the most paste-heavy surface in the app.
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    const { isEditable, editFlags, selectionText } = params;
+    if (!isEditable && !selectionText) return;
+    const template: Electron.MenuItemConstructorOptions[] = isEditable
+      ? [
+          { role: 'cut', enabled: editFlags.canCut },
+          { role: 'copy', enabled: editFlags.canCopy },
+          { role: 'paste', enabled: editFlags.canPaste },
+          { type: 'separator' },
+          { role: 'selectAll' },
+        ]
+      : [{ role: 'copy', enabled: editFlags.canCopy }];
+    Menu.buildFromTemplate(template).popup({ window: mainWindow! });
+  });
+
   // Grant the renderer access to the microphone so the Web Speech API
   // (composer voice input) can capture audio. Other permissions stay
   // denied. Pair with NSMicrophoneUsageDescription in Info.plist and
@@ -376,7 +397,7 @@ function setupIPC() {
     activeInstall = state;
     try {
       // runInstaller now also spins up the python server as its final
-      // visible step (so the install screen shows "Start Anton server").
+      // visible step (so the install screen shows "Start Cowork server").
       return await runInstaller(mainWindow, { shouldAbort: () => state.cancelled });
     } finally {
       if (activeInstall === state) {
@@ -739,14 +760,14 @@ app.whenReady().then(() => {
         label: app.name,
         submenu: [
           {
-            label: 'About Anton',
+            label: 'About MindsHub Cowork',
             click: () => {
               const uiVersion = getCachedVersion();
               const versionStr = uiVersion
                 ? `${app.getVersion()} (UI: ${uiVersion})`
                 : app.getVersion();
               app.setAboutPanelOptions({
-                applicationName: 'Anton',
+                applicationName: 'MindsHub Cowork',
                 applicationVersion: versionStr,
                 copyright: 'By MindsDB',
                 credits: 'Autonomous AI Coworker\nhttps://mindsdb.com',

@@ -1,4 +1,5 @@
 # CLAUDE.md
+# MindsHub Cowork — build & dev notes
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -15,6 +16,14 @@ Electron 39 + Vite + React 19 + Tailwind desktop app with a FastAPI Python sidec
 PATH="/opt/homebrew/opt/node@20/bin:$PATH" npm run pack
 
 # Dev mode — hot-reloads renderer (needs cowork-server running separately)
+- Output: `release/mac-arm64/MindsHub Cowork.app`
+- Confirm with: `stat -f "%Sm" -t "%H:%M:%S" "release/mac-arm64/MindsHub Cowork.app"`
+- Code-sign warnings ("0 valid identities found") are expected in dev — ignore.
+- Build is the only way to verify Python server changes; the renderer is bundled into the same artifact.
+
+## Dev mode (renderer only, faster iteration)
+
+```sh
 PATH="/opt/homebrew/opt/node@20/bin:$PATH" npm run dev
 
 # Web SPA (no Electron) — spins up cowork-server + Vite on http://localhost:5173/
