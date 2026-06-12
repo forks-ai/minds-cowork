@@ -14,6 +14,7 @@ import {
   deleteArtifact,
 } from '../../api';
 import { copyText } from '../../lib/clipboard';
+import { downloadArtifactFile } from '../../lib/artifactDownload';
 import { Modal } from '../ui/Modal';
 import { ConfirmModal } from '../ConfirmModal';
 import { host } from '../../../platform/host';
@@ -561,30 +562,16 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
       setErr(e?.message || 'Open failed');
     }
   };
-  // Web-shell download — Electron exposes openPath via the IPC bridge,
-  // but the browser build has no filesystem access. We already loaded
-  // the file body via `previewArtifact`, so wrap it in a Blob and
-  // trigger a synthetic anchor click. Only meaningful when textPreview
-  // is populated (i.e. for .md/.txt/.csv).
-  const onDownloadText = () => {
-    if (!textPreview?.content) {
-      setErr('No content available to download.');
-      return;
+  // Universal "save to disk" — type-agnostic stream through the
+  // sidecar's serve endpoint with Content-Disposition: attachment.
+  // Used both by the header action-row Download button and by the
+  // "Download full file" affordance under truncated text/CSV previews
+  // in the web shell (the previous `onDownloadText` was a 200KB-
+  // capped Blob fallback; this streams the real file).
+  const onDownload = () => {
+    if (!downloadArtifactFile(artifact, { actionPath })) {
+      setErr(disabledReason || 'This artifact has no serve URL yet.');
     }
-    const filename = (actionPath || '').split('/').pop() || artifact.title || 'artifact.txt';
-    const blob = new Blob([textPreview.content], {
-      type: textPreview.mime || 'text/plain;charset=utf-8',
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    // Revoke after the click lands — Safari needs a tick before the
-    // download actually starts; revoking synchronously cancels it.
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   const onTrash = () => {
     if (busy) return;
@@ -796,6 +783,23 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
               {busy ? 'Publishing…' : 'Publish'}
             </button>
           )}
+          {artifact?.serveUrl && (
+            <button
+              type="button"
+              onClick={onDownload}
+              title="Download artifact to your computer"
+              style={{
+                cursor: 'pointer',
+                background: 'transparent',
+                border: '1px solid var(--line)',
+                color: 'var(--ink-2)',
+                padding: '6px 12px', borderRadius: 8,
+                fontSize: 12.5, fontWeight: 500,
+              }}
+            >
+              Download
+            </button>
+          )}
           <button
             ref={kebabRef}
             type="button"
@@ -849,6 +853,14 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
               disabled: !hasActionPath,
               onClick: onOpenOS,
             }]),
+            // Download mirrors the main action-row button and the
+            // list-view kebab — visible in any shell as long as the
+            // artifact has a serve URL the sidecar can stream.
+            ...(artifact?.serveUrl ? [{
+              label: 'Download',
+              icon: Ico.download(13),
+              onClick: onDownload,
+            }] : []),
             {
               label: publishedUrl ? 'Unpublish' : 'Publish',
               icon: Ico.upload(13),
@@ -914,7 +926,7 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
                   </span>
                   <button
                     type="button"
-                    onClick={host.isWeb ? onDownloadText : onOpenOS}
+                    onClick={host.isWeb ? onDownload : onOpenOS}
                     style={{
                       cursor: 'pointer',
                       background: 'transparent',

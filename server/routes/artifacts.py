@@ -471,12 +471,44 @@ def _serve_url_for(path: str | Path) -> str:
     return ""
 
 
+def _attachment_disposition(filename: str) -> str:
+    """Build a `Content-Disposition: attachment` header value for the
+    given filename, in RFC 5987 / RFC 6266 form (ASCII fallback plus
+    percent-encoded UTF-8 `filename*=` for modern browsers).
+
+    Sanitizes CR / LF / double-quote / backslash out of the ASCII
+    fallback. These are ASCII bytes so `encode("ascii", "replace")`
+    doesn't touch them, but they each break the RFC 6266 quoted-string
+    `filename=` segment — `\\r\\n` would inject extra response headers,
+    `"` ends the quoted string early, `\\` is a quoted-string escape
+    that can swallow the next char. The percent-encoded `filename*=`
+    half is safe (every non-token byte gets %-encoded by `quote()`).
+
+    Artifact files originate from the agent's shell tool which can in
+    principle land filenames with any byte the OS permits, including
+    \\n on macOS/Linux, so this guard is real, not theoretical.
+    """
+    ascii_fallback = filename.encode("ascii", "replace").decode("ascii")
+    for ch in '\r\n"\\':
+        ascii_fallback = ascii_fallback.replace(ch, "_")
+    return (
+        f'attachment; filename="{ascii_fallback}"; '
+        f"filename*=UTF-8''{quote(filename)}"
+    )
+
+
 @router.get("/serve/{project_name}/{file_path:path}")
-def serve_artifact(project_name: str, file_path: str):
+def serve_artifact(project_name: str, file_path: str, download: bool = False):
     """Serve a file from `<project>/.anton/artifacts/<file_path>` over
     HTTP. Stateless, origin-relative, frame-able (no X-Frame-Options) so
     the in-app iframe and a plain new-tab open both work in the web
-    deployment without round-tripping a publish to the external host."""
+    deployment without round-tripping a publish to the external host.
+
+    When `?download=1`, sets `Content-Disposition: attachment` so the
+    browser triggers a save-as dialog instead of rendering the file
+    inline. Type-agnostic — any artifact byte stream (HTML, JSON, CSV,
+    PNG, PDF, binary, …) downloads through the same path.
+    """
     base = _project_artifacts_base(project_name)
     if base is None:
         raise HTTPException(status_code=404, detail="Unknown project")
@@ -492,9 +524,10 @@ def serve_artifact(project_name: str, file_path: str):
     # frames this same-origin. The viewer's iframe sandbox already
     # drops `allow-same-origin`, so framing can't be abused to read the
     # API with the user's session.
-    return FileResponse(target, media_type=media_type, headers={
-        "Cache-Control": "private, max-age=60",
-    })
+    headers = {"Cache-Control": "private, max-age=60"}
+    if download:
+        headers["Content-Disposition"] = _attachment_disposition(target.name)
+    return FileResponse(target, media_type=media_type, headers=headers)
 
 
 # ─── Listing ───────────────────────────────────────────────────────────────
