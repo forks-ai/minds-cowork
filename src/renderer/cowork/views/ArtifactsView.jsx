@@ -105,6 +105,19 @@ function isHtmlArtifact(a) {
     || (a.path || '').toLowerCase().endsWith('.html');
 }
 
+// Artifact types the user can publish to a 4nton.ai page. HTML is served
+// as-is; Markdown is rendered to a styled HTML page server-side (see
+// cowork-server PUBLISHABLE_STATIC_SUFFIXES). This is broader than
+// isHtmlArtifact() — which still gates HTML-only behaviours like live
+// iframe preview, where Markdown does NOT belong.
+function isPublishableArtifact(a) {
+  if (!a) return false;
+  const ext = (a.ext || '').toLowerCase();
+  const path = (a.path || '').toLowerCase();
+  return ext === '.html' || path.endsWith('.html')
+    || ext === '.md' || path.endsWith('.md');
+}
+
 // Extensions we can preview inline in the in-app ArtifactViewer (text
 // branch). Keep in sync with the viewer's own TEXT_PREVIEW_EXTS so the
 // click handlers and the body renderer agree on what's previewable.
@@ -882,7 +895,7 @@ function RowMenu({ open, anchorRect, artifact, onClose, onOpen, onReveal, onDown
         <Item label="Download" icon={Ico.download(13)} onClick={onDownload} />
       )}
       {published && <Item label="Copy URL" icon={Ico.copy(13)} onClick={onCopyUrl} />}
-      {isHtml && !published && (
+      {isPublishableArtifact(artifact) && !published && (
         <Item label="Publish" icon={Ico.upload(13)} onClick={onPublish} />
       )}
       {published && (
@@ -1254,8 +1267,8 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
   // a protected artifact pre-fills its existing password.
   const handlePublish = (artifact) => {
     if (!artifact?.path || busyPaths.has(artifact.path)) return Promise.resolve();
-    if (!isHtmlArtifact(artifact)) {
-      setToast({ kind: 'error', message: 'Only HTML artifacts can be published.' });
+    if (!isPublishableArtifact(artifact)) {
+      setToast({ kind: 'error', message: 'Only HTML and Markdown artifacts can be published.' });
       return Promise.resolve();
     }
     // Settle any prior unresolved flow before starting a new one so a
