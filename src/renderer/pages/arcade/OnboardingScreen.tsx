@@ -7,9 +7,10 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { host } from '../../platform/host';
-import { BASE } from '../../cowork/api';
+import { BASE, fetchRecommendedModels } from '../../cowork/api';
 import { PROVIDER_MODELS } from '../../cowork/lib/settingsTransform';
 import { MINDS_API_BASE, MINDS_REGISTER_URL } from '../../lib/mindsUrls';
+import { syncSettingsToDb } from '../../lib/syncSettings';
 import { ArcadeShell, PixelMarquee } from './components';
 import { PixelSprite, type SpriteName } from './sprites';
 
@@ -25,57 +26,25 @@ const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai
 
 const CUSTOM_MODEL = '__custom__';
 
-// Env-var names (ANTON_FOO_BAR) → backend setting keys (foo_bar).
-const ENV_TO_SETTING: Record<string, string> = {
-  ANTON_ANTHROPIC_API_KEY: 'anthropic_api_key',
-  ANTON_OPENAI_API_KEY: 'openai_api_key',
-  ANTON_OPENAI_BASE_URL: 'openai_base_url',
-  ANTON_MINDS_API_KEY: 'minds_api_key',
-  ANTON_MINDS_URL: 'minds_url',
-  ANTON_PLANNING_PROVIDER: 'planning_provider',
-  ANTON_CODING_PROVIDER: 'coding_provider',
-  ANTON_PLANNING_MODEL: 'planning_model',
-  ANTON_CODING_MODEL: 'coding_model',
-  ANTON_MEMORY_MODE: 'memory_mode',
-  ANTON_EPISODIC_MEMORY: 'episodic_memory',
-};
+// Last-resort MindsHub model, used only if the backend returns nothing. We
+// avoid maintaining model names in this repo, but a single safe fallback is
+// worth it: the validator's generic openai-compatible default is not served
+// by MindsHub. `latest:*` is a stable alias, not a pinned version, so it
+// won't drift. The backend's own default (apply_model_defaults) is the real
+// source — this only guards a failed `/recommended-models` fetch.
+const FALLBACK_MINDS_MODEL = 'latest:sonnet';
 
-/** Push onboarding settings to the cowork-server backend DB. */
-async function syncToBackend(lines: string[]): Promise<void> {
-  // The .env always writes "openai-compatible" for both MindsHub and
-  // generic endpoints; the backend Provider enum distinguishes
-  // "minds_cloud" from "openai_compatible", so map based on whether a
-  // Minds key is present.
-  const envMap: Record<string, string> = {};
-  for (const line of lines) {
-    const eq = line.indexOf('=');
-    if (eq <= 0) continue;
-    envMap[line.slice(0, eq)] = line.slice(eq + 1);
-  }
-  const hasMindKey = Boolean(envMap.ANTON_MINDS_API_KEY);
-
-  for (const [envKey, value] of Object.entries(envMap)) {
-    const settingKey = ENV_TO_SETTING[envKey];
-    if (!settingKey) continue;
-    let dbValue = value;
-    if (settingKey.endsWith('_provider')) {
-      if (dbValue === 'openai-compatible' && hasMindKey) {
-        dbValue = 'minds_cloud';
-      } else {
-        dbValue = dbValue.replace(/-/g, '_');
-      }
-    }
-    try {
-      await fetch(`${BASE}/settings/${encodeURIComponent(settingKey)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value: dbValue }),
-      });
-    } catch {
-      // Best-effort — the .env is the source of truth for the Electron
-      // main process; the backend picks it up on next restart.
-    }
-  }
+/**
+ * The model to probe MindsHub LLM availability with, sourced from the
+ * backend's recommended minds-cloud (planning, coding) pair. Returns the
+ * coding model, falling back to planning, then to FALLBACK_MINDS_MODEL if the
+ * backend is unreachable — never undefined, so the probe always sends a
+ * MindsHub-served model rather than the validator's generic default.
+ */
+async function mindsProbeModel(): Promise<string> {
+  const rec = await fetchRecommendedModels();
+  const pair = rec?.recommendedPair?.['minds-cloud'];
+  return pair?.[1] || pair?.[0] || FALLBACK_MINDS_MODEL;
 }
 
 /** Persist the cartridge choice as the `harness` setting (best-effort). */
@@ -234,7 +203,7 @@ export default function OnboardingScreen({
     lines.push('ANTON_MEMORY_MODE=autopilot');
     lines.push('ANTON_EPISODIC_MEMORY=true');
     await host.saveSettings(lines.join('\n'));
-    await syncToBackend(lines);
+    await syncSettingsToDb(lines);
     await syncHarness(coworker.id);
     setPhase('success');
     setTimeout(onComplete, 2000);
@@ -260,20 +229,24 @@ export default function OnboardingScreen({
         `ANTON_MINDS_URL=${mindsBase}`,
       ];
 
+      // The probe model is the backend's recommended minds-cloud coding
+      // model — fetched, never hardcoded here, so model names live only in
+      // cowork-server.
       const llmResult = await host.validateProvider(
         'openai-compatible',
         apiKey.trim(),
         `${mindsBase}/v1`,
-        '_code_'
+        await mindsProbeModel()
       );
 
       if (llmResult.ok) {
+        // Set only the provider; the backend resolves the default
+        // planning/coding model on load and reports it back to the UI
+        // (apply_model_defaults), so we never write model names.
         const lines = [
           ...mindsLines,
           'ANTON_PLANNING_PROVIDER=minds-cloud',
           'ANTON_CODING_PROVIDER=minds-cloud',
-          'ANTON_PLANNING_MODEL=_reason_',
-          'ANTON_CODING_MODEL=_code_',
         ];
         await saveFinal(lines);
       } else {
@@ -339,7 +312,7 @@ export default function OnboardingScreen({
     finalizedRef.current = true;
     const lines = Object.entries(merged).map(([k, v]) => `${k}=${v}`);
     await host.saveSettings(lines.join('\n'));
-    await syncToBackend(lines);
+    await syncSettingsToDb(lines);
     await syncHarness(coworker.id);
     setPhase('success');
     setTimeout(onComplete, 2000);
@@ -351,7 +324,20 @@ export default function OnboardingScreen({
     const loginResult = await host.mindshubLogin();
     if (!loginResult.ok) {
       setPhase('error');
-      setErrorMsg('Sign in cancelled or failed. Please try again.');
+      const reason = String(loginResult.reason || '');
+      const reloadKey = host.isMac() ? 'Cmd+R' : 'Ctrl+R';
+      if (/timed out/i.test(reason)) {
+        // The loopback callback never arrived — usually the sign-in
+        // happened in a STALE browser tab from an earlier app launch
+        // (the callback port changes every launch).
+        setErrorMsg(
+          `Sign-in timed out — the browser never finished authorizing. Try again and complete the newest tab it opens (close any older "You're authorized" tabs), or press ${reloadKey} to reload.`,
+        );
+      } else if (/cancelled/i.test(reason)) {
+        setErrorMsg('Sign-in was cancelled. Press SIGN IN WITH MINDSHUB to try again.');
+      } else {
+        setErrorMsg(reason || 'Sign in failed. Please try again.');
+      }
       return;
     }
     const finalizeResult = await host.mindshubFinalize();
@@ -360,14 +346,13 @@ export default function OnboardingScreen({
       setErrorMsg(finalizeResult.reason || 'Failed to set up MindsHub. Please try again.');
       return;
     }
+    // Provider only — the backend resolves the default model on load.
     const lines = [
       'ANTON_TERMS_CONSENT=true',
       'ANTON_MINDS_ENABLED=true',
       'ANTON_MINDS_URL=https://api.mindshub.ai',
       'ANTON_PLANNING_PROVIDER=minds-cloud',
       'ANTON_CODING_PROVIDER=minds-cloud',
-      'ANTON_PLANNING_MODEL=latest:sonnet',
-      'ANTON_CODING_MODEL=latest:haiku',
     ];
     if (finalizeResult.apiKey) {
       lines.push(`ANTON_MINDS_API_KEY=${finalizeResult.apiKey}`);
@@ -389,14 +374,13 @@ export default function OnboardingScreen({
     let cancelled = false;
     import('../../lib/keycloak').then(({ keycloak }) => {
       if (cancelled || finalizedRef.current || !keycloak.authenticated) return;
+      // Provider only — the backend resolves the default model on load.
       saveFinal([
         'ANTON_TERMS_CONSENT=true',
         'ANTON_MINDS_ENABLED=true',
         'ANTON_MINDS_URL=https://api.mindshub.ai',
         'ANTON_PLANNING_PROVIDER=minds-cloud',
         'ANTON_CODING_PROVIDER=minds-cloud',
-        'ANTON_PLANNING_MODEL=latest:sonnet',
-        'ANTON_CODING_MODEL=latest:haiku',
       ]);
     });
     return () => { cancelled = true; };

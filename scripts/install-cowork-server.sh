@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-DEFAULT_VERSION="0.1.4"
+DEFAULT_VERSION="0.1.5"
 VERSION="${COWORK_SERVER_VERSION:-$DEFAULT_VERSION}"
 
 echo "→ Installing cowork-server==${VERSION} from PyPI" >&2

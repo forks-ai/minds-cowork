@@ -21,6 +21,10 @@ const PYPI_JSON_URL = `https://pypi.org/pypi/${PACKAGE_NAME}/json`;
 const PYPI_TIMEOUT_MS = 5000;
 const DISABLE_VAR = 'COWORK_SERVER_DISABLE_AUTOUPDATE';
 
+// PyO3 (used by pywinpty on Windows) doesn't support 3.14 yet.
+// Keep in sync with installer.ts PYTHON_RANGE and cowork-server requires-python.
+const PYTHON_RANGE = '>=3.12,<3.14';
+
 export interface ServerUpdateResult {
   updated: boolean;
   previousVersion?: string;
@@ -134,8 +138,8 @@ function runUpgrade(uv: string): Promise<{ ok: boolean; stderr: string }> {
   return new Promise((resolve) => {
     execFile(
       uv,
-      ['tool', 'install', '--upgrade', '--reinstall', PACKAGE_NAME],
-      { env: { ...process.env, PATH: getEnvPath() }, timeout: 120000 },
+      ['tool', 'install', '--upgrade', '--reinstall', '--python', PYTHON_RANGE, PACKAGE_NAME],
+      { env: { ...process.env, PATH: getEnvPath(), UV_PYTHON_PREFERENCE: 'only-managed' }, timeout: 120000 },
       (err, _stdout, stderr) => {
         resolve({ ok: !err, stderr: stderr || err?.message || '' });
       },
@@ -148,8 +152,8 @@ function installVersion(uv: string, version: string): Promise<{ ok: boolean; std
   return new Promise((resolve) => {
     execFile(
       uv,
-      ['tool', 'install', '--force', '--reinstall', `${PACKAGE_NAME}==${version}`],
-      { env: { ...process.env, PATH: getEnvPath() }, timeout: 120000 },
+      ['tool', 'install', '--force', '--reinstall', '--python', PYTHON_RANGE, `${PACKAGE_NAME}==${version}`],
+      { env: { ...process.env, PATH: getEnvPath(), UV_PYTHON_PREFERENCE: 'only-managed' }, timeout: 120000 },
       (err, _stdout, stderr) => {
         resolve({ ok: !err, stderr: stderr || err?.message || '' });
       },
