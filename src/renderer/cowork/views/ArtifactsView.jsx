@@ -20,6 +20,7 @@ import {
 } from '../api';
 import { copyText } from '../lib/clipboard';
 import { downloadArtifactFile } from '../lib/artifactDownload';
+import { isHtmlArtifact, isPublishableArtifact } from '../lib/artifactKinds';
 import { Modal, ModalHeader, ModalBody, ModalFooter } from '../components/ui/Modal';
 import { ArtifactViewer } from '../components/artifact';
 import {
@@ -98,24 +99,6 @@ function projectOf(artifact, projects = []) {
     const pre = proj.path.replace(/\/+$/, '') + '/';
     return p.startsWith(pre);
   }) || null;
-}
-
-function isHtmlArtifact(a) {
-  return (a.ext || '').toLowerCase() === '.html'
-    || (a.path || '').toLowerCase().endsWith('.html');
-}
-
-// Artifact types the user can publish to a 4nton.ai page. HTML is served
-// as-is; Markdown is rendered to a styled HTML page server-side (see
-// cowork-server PUBLISHABLE_STATIC_SUFFIXES). This is broader than
-// isHtmlArtifact() — which still gates HTML-only behaviours like live
-// iframe preview, where Markdown does NOT belong.
-function isPublishableArtifact(a) {
-  if (!a) return false;
-  const ext = (a.ext || '').toLowerCase();
-  const path = (a.path || '').toLowerCase();
-  return ext === '.html' || path.endsWith('.html')
-    || ext === '.md' || path.endsWith('.md');
 }
 
 // Extensions we can preview inline in the in-app ArtifactViewer (text
