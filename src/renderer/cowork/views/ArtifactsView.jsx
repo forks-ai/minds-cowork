@@ -11,15 +11,16 @@
 // Status dot: cyan = published, green-pulse = live preview, none = local.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import Ico from '../components/Icons';
 import {
-  openArtifact, revealArtifact,
-  publishArtifact, unpublishArtifact,
+  revealArtifact, publishArtifact, unpublishArtifact,
   deleteArtifact,
-  artifactServeUrl, openArtifactFile,
+  publishTargetPath, artifactServeUrl, openArtifactFile,
 } from '../api';
 import { copyText } from '../lib/clipboard';
 import { downloadArtifactFile } from '../lib/artifactDownload';
+import { isHtmlArtifact, isPublishableArtifact } from '../lib/artifactKinds';
 import { Modal, ModalHeader, ModalBody, ModalFooter } from '../components/ui/Modal';
 import { ArtifactViewer } from '../components/artifact';
 import {
@@ -98,11 +99,6 @@ function projectOf(artifact, projects = []) {
     const pre = proj.path.replace(/\/+$/, '') + '/';
     return p.startsWith(pre);
   }) || null;
-}
-
-function isHtmlArtifact(a) {
-  return (a.ext || '').toLowerCase() === '.html'
-    || (a.path || '').toLowerCase().endsWith('.html');
 }
 
 // Extensions we can preview inline in the in-app ArtifactViewer (text
@@ -882,7 +878,7 @@ function RowMenu({ open, anchorRect, artifact, onClose, onOpen, onReveal, onDown
         <Item label="Download" icon={Ico.download(13)} onClick={onDownload} />
       )}
       {published && <Item label="Copy URL" icon={Ico.copy(13)} onClick={onCopyUrl} />}
-      {isHtml && !published && (
+      {isPublishableArtifact(artifact) && !published && (
         <Item label="Publish" icon={Ico.upload(13)} onClick={onPublish} />
       )}
       {published && (
@@ -1254,8 +1250,8 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
   // a protected artifact pre-fills its existing password.
   const handlePublish = (artifact) => {
     if (!artifact?.path || busyPaths.has(artifact.path)) return Promise.resolve();
-    if (!isHtmlArtifact(artifact)) {
-      setToast({ kind: 'error', message: 'Only HTML artifacts can be published.' });
+    if (!isPublishableArtifact(artifact)) {
+      setToast({ kind: 'error', message: 'Only HTML and Markdown artifacts can be published.' });
       return Promise.resolve();
     }
     // Settle any prior unresolved flow before starting a new one so a
@@ -1271,7 +1267,7 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
     if (!artifact?.path || busyPaths.has(artifact.path)) { settlePublish(); return; }
     setBusy(artifact.path, true);
     try {
-      const r = await publishArtifact(artifact.path, password || undefined);
+      const r = await publishArtifact(publishTargetPath(artifact), password || undefined);
       if (r?.url) {
         updateOne({
           ...artifact,
@@ -1303,7 +1299,7 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
     if (!artifact?.path || busyPaths.has(artifact.path)) return;
     setBusy(artifact.path, true);
     try {
-      await unpublishArtifact(artifact.path);
+      await unpublishArtifact(publishTargetPath(artifact));
       updateOne({ ...artifact, publishedUrl: '' });
       setToast({ kind: 'ok', message: 'Unpublished from MindsHub.' });
     } catch (e) {
@@ -1388,19 +1384,23 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
         subtitleBottom={20}
       />
 
-      {/* Toast floats over the page so it can't perturb the
-          subtitle → search spacing. */}
-      <div style={{
-        position: 'fixed', top: 24, right: 32, zIndex: 70,
-        pointerEvents: toast?.message ? 'auto' : 'none',
-        maxWidth: 420,
-      }}>
-        <Toast
-          kind={toast?.kind}
-          message={toast?.message}
-          onClose={() => setToast(null)}
-        />
-      </div>
+      {/* Toast is portalled to document.body so it renders after modals
+          in DOM order, which prevents iframes inside modals from
+          compositing on top of it regardless of z-index. */}
+      {createPortal(
+        <div style={{
+          position: 'fixed', top: 24, right: 32, zIndex: 90,
+          pointerEvents: toast?.message ? 'auto' : 'none',
+          maxWidth: 420,
+        }}>
+          <Toast
+            kind={toast?.kind}
+            message={toast?.message}
+            onClose={() => setToast(null)}
+          />
+        </div>,
+        document.body,
+      )}
 
       {/* Subtitle → search-row gap. Set to 20px per the design;
           ProjectsView uses 18px because its header has an anchor

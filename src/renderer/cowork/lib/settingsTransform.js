@@ -83,10 +83,11 @@ export function providerTypeToServerValue(value) {
 // SettingsView both import from here. Each entry carries the model ID
 // and a human-readable label for dropdowns.
 export const PROVIDER_MODELS = {
-  'minds-cloud': [
-    { id: '_reason_', label: 'Reasoning' },
-    { id: '_code_', label: 'Coding' },
-  ],
+  // MindsHub model names are owned by the backend, not this repo. The list
+  // is supplied at runtime by `/settings/recommended-models` (the live
+  // MindsHub `/v1/models` set) and overlaid in fetchSettings(). Left empty
+  // so no model names are maintained here.
+  'minds-cloud': [],
   anthropic: [
     { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' },
     { id: 'claude-opus-4-6', label: 'Claude Opus 4.6' },
@@ -94,8 +95,8 @@ export const PROVIDER_MODELS = {
     { id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5' },
   ],
   openai: [
-    { id: 'gpt-5.4', label: 'GPT-5.4' },
-    { id: 'gpt-5.4-mini', label: 'GPT-5.4 Mini' },
+    { id: 'gpt-5.5', label: 'GPT-5.5' },
+    { id: 'gpt-5.5-mini', label: 'GPT-5.5 Mini' },
     { id: 'o3', label: 'o3' },
     { id: 'o4-mini', label: 'o4 Mini' },
   ],
@@ -121,9 +122,10 @@ export const STATIC_SETTINGS = {
     Object.entries(PROVIDER_MODELS).map(([k, v]) => [k, v.map((m) => m.id)]),
   ),
   recommendedPair: {
-    'minds-cloud': ['_reason_', '_code_'],
+    // minds-cloud defaults come from the backend (recommendedPair) at runtime.
+    'minds-cloud': ['', ''],
     anthropic: ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-    openai: ['gpt-5.4', 'gpt-5.4-mini'],
+    openai: ['gpt-5.5', 'gpt-5.5-mini'],
     gemini: ['gemini-2.5-pro', 'gemini-2.5-flash'],
     'openai-compatible': ['', ''],
   },

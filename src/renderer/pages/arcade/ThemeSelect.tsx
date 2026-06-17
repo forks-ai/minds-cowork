@@ -2,8 +2,8 @@
 // cartridge is chosen and before POWER UP.
 //
 // Four preset "monitors", each a miniature render of the app in that
-// palette: ARCADE (8-bit dark), GAME BOY (8-bit light), MIDNIGHT
-// (normal dark), DAYLIGHT (normal light). One pick sets both axes
+// palette: MIDNIGHT (normal dark), DAYLIGHT (normal light), GAME BOY
+// (8-bit light), ARCADE (8-bit dark). One pick sets both axes
 // (skin + light/dark). A footer points at Settings → Appearance, where
 // the user can mix the axes freely or design their own Custom theme —
 // deliberately NOT on this screen, to keep onboarding one decision.
@@ -24,27 +24,10 @@ export interface ThemePreset {
   scanlines: boolean;
 }
 
+// Order = the slots on screen: the standard looks lead (dark first,
+// matching the CRT chooser itself), the 8-bit skins follow, and the
+// CREATE YOUR OWN card below always sits last.
 export const THEME_PRESETS: ThemePreset[] = [
-  {
-    id: 'arcade',
-    name: 'ARCADE',
-    sub: '8-BIT · DARK',
-    desc: 'Phosphor cyan on deep navy, CRT scanlines, chunky mono type. The coin-op classic.',
-    skin: '8bit', theme: 'dark',
-    color: '#3dd6f5',
-    p: { bg: '#0a0a13', side: '#10101a', ink: '#ecedf6', muted: '#8d8fa8', accent: '#3dd6f5', line: '#2e2e44' },
-    scanlines: true,
-  },
-  {
-    id: 'gameboy',
-    name: 'GAME BOY',
-    sub: '8-BIT · LIGHT',
-    desc: 'Olive paper and deep-green ink, mono type. Handheld nostalgia for bright rooms.',
-    skin: '8bit', theme: 'light',
-    color: '#4ade80',
-    p: { bg: '#e8ead8', side: '#e2e5cd', ink: '#232b1e', muted: '#5f6b4e', accent: '#2e7d4f', line: '#c2c7a4' },
-    scanlines: true,
-  },
   {
     id: 'midnight',
     name: 'MIDNIGHT',
@@ -64,6 +47,26 @@ export const THEME_PRESETS: ThemePreset[] = [
     color: '#fbbf24',
     p: { bg: '#FAFAFA', side: '#ECECEA', ink: '#0E0F10', muted: '#6B6F73', accent: '#1F9CB0', line: '#E4E4E1' },
     scanlines: false,
+  },
+  {
+    id: 'gameboy',
+    name: 'GAME BOY',
+    sub: '8-BIT · LIGHT',
+    desc: 'Olive paper and deep-green ink, mono type. Handheld nostalgia for bright rooms.',
+    skin: '8bit', theme: 'light',
+    color: '#4ade80',
+    p: { bg: '#e8ead8', side: '#e2e5cd', ink: '#232b1e', muted: '#5f6b4e', accent: '#2e7d4f', line: '#c2c7a4' },
+    scanlines: true,
+  },
+  {
+    id: 'arcade',
+    name: 'ARCADE',
+    sub: '8-BIT · DARK',
+    desc: 'Phosphor cyan on deep navy, CRT scanlines, chunky mono type. The coin-op classic.',
+    skin: '8bit', theme: 'dark',
+    color: '#3dd6f5',
+    p: { bg: '#0a0a13', side: '#10101a', ink: '#ecedf6', muted: '#8d8fa8', accent: '#3dd6f5', line: '#2e2e44' },
+    scanlines: true,
   },
 ];
 
