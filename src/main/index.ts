@@ -393,6 +393,19 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
+    // Start the boot-veil fade only now that the window is actually visible.
+    // (A parse-time CSS animation would finish while the window is still
+    // hidden behind `show:false`, so the black cover would be gone before the
+    // first frame the user sees.) The welcome orb is already rendered by now,
+    // so we only need a brief mask over the show moment — then fade quickly
+    // into the animated orb. A long black hold reads as a hung/broken screen.
+    setTimeout(() => {
+      mainWindow?.webContents
+        .executeJavaScript(
+          "var v=document.getElementById('boot-veil');if(v)v.classList.add('boot-veil--fade');",
+        )
+        .catch(() => {});
+    }, 140);
   });
 
   mainWindow.on('closed', () => {

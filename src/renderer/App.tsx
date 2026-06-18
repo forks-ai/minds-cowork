@@ -20,7 +20,10 @@ type Page = 'loading' | 'auth' | 'setup' | 'terminal';
 const TERMS_CONSENT_KEY = 'anton.termsConsent';
 const COWORKER_KEY = 'anton.coworker';
 // Minimum time the welcome orb stays up so it doesn't flash on fast boots.
-const WELCOME_MIN_MS = 1400;
+// The boot veil only briefly masks the window-show moment (~140ms + ~260ms
+// fade), so the animated orb is on screen almost immediately and stays for
+// roughly this long before routing onward.
+const WELCOME_MIN_MS = 1600;
 
 function hasLocalTermsConsent(): boolean {
   try {

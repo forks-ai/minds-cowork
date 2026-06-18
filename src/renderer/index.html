@@ -8,8 +8,10 @@
     <link rel="stylesheet" href="./gravity-field/gravity-field.css" />
     <!-- Boot veil: a solid-black layer painted on the very first frame
          (before JS runs) so the window never flashes the half-initialized
-         canvas / pre-skin theme. It holds black briefly, then fades out to
-         reveal whatever the app has settled into. Pure CSS, self-removing. -->
+         canvas / pre-skin theme. It stays opaque until the main process adds
+         `boot-veil--fade` right after the window becomes visible
+         (ready-to-show), then transitions out — so the black is guaranteed to
+         cover the very first frame the user actually sees. -->
     <style>
       #boot-veil {
         position: fixed;
@@ -17,14 +19,12 @@
         background: #000;
         z-index: 2147483647;
         pointer-events: none;
-        animation: boot-veil-fade 600ms ease-out 320ms both;
+        opacity: 1;
+        transition: opacity 260ms ease-out, visibility 0s linear 260ms;
       }
-      @keyframes boot-veil-fade {
-        0%   { opacity: 1; }
-        100% { opacity: 0; visibility: hidden; }
-      }
+      #boot-veil.boot-veil--fade { opacity: 0; visibility: hidden; }
       @media (prefers-reduced-motion: reduce) {
-        #boot-veil { animation-delay: 0ms; animation-duration: 1ms; }
+        #boot-veil { transition-duration: 1ms; }
       }
     </style>
   </head>
@@ -52,5 +52,30 @@
       );
     </script>
     <script type="module" src="./main.tsx"></script>
+    <script>
+      // Fade the boot veil once the window is actually visible.
+      //   • First open: the window is created hidden (show:false), so the doc
+      //     starts 'hidden' — wait for it to become visible, then fade. (The
+      //     main process also nudges this on ready-to-show; both are idempotent.)
+      //   • Refresh: ready-to-show does NOT fire again, but the window is
+      //     already visible, so fade right away — no long black screen.
+      (function () {
+        function fade() {
+          var v = document.getElementById('boot-veil');
+          if (v) v.classList.add('boot-veil--fade');
+        }
+        if (document.visibilityState === 'visible') {
+          setTimeout(fade, 140);
+        } else {
+          document.addEventListener('visibilitychange', function onVis() {
+            if (document.visibilityState === 'visible') {
+              document.removeEventListener('visibilitychange', onVis);
+              setTimeout(fade, 140);
+            }
+          });
+          setTimeout(fade, 3000); // safety net if visibility never flips
+        }
+      })();
+    </script>
   </body>
 </html>
