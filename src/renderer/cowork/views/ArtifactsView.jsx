@@ -1325,10 +1325,7 @@ export default function ArtifactsView({ artifacts: initial = EMPTY_ARTIFACTS, pr
           orgAllowed: m === 'restricted' ? !!(r.orgAllowed ?? access?.org_allowed) : false,
         });
         const label = m === 'password' ? 'password protected' : m === 'restricted' ? 'restricted' : null;
-        trackArtifactPublished(
-          r.report_id || artifact.id || '',
-          password ? 'password' : 'public',
-        );
+        trackArtifactPublished(r.report_id || artifact.id || '', m);
         setToast({
           kind: 'ok',
           message: label ? `Published (${label}) — ${r.url}` : `Published — ${r.url}`,
