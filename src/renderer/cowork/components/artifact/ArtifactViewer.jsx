@@ -411,6 +411,11 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const kebabRef = useRef(null);
+  // Per-open counter used as a cache-buster fallback for artifacts whose
+  // object carries no `mtime` (e.g. chat-bubble previews built from stream
+  // steps). Increments only when there's no mtime, so every (re)open of
+  // such an artifact fetches fresh content (ENG-375).
+  const openNonceRef = useRef(0);
 
   const isText = _isTextArtifact(artifact);
   const textExt = isText
@@ -467,6 +472,13 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
         .finally(() => { if (!cancelled) setLoading(false); });
       return () => { cancelled = true; };
     }
+    // Cache-buster for the iframe so a content change (or just reopening)
+    // fetches fresh content instead of the webview's first-loaded copy.
+    // Prefer the server's content `mtime` — it changes only on a real edit,
+    // so an unchanged reopen can still reuse cache. Fall back to a per-open
+    // nonce for artifacts that carry no mtime (chat-bubble previews, loose
+    // files), so those at least always show fresh content on open.
+    const cacheVersion = artifact?.mtime ?? (openNonceRef.current += 1);
     mountArtifactPreview(actionPath)
       .then(async ({ kind, url, artifactDir, port, proxyUrl, publishedUrl: serverPublishedUrl, backendRunning, launchError }) => {
         if (kind === 'proxy') {
@@ -483,7 +495,7 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
             iframeUrl = u.toString();
           } catch { /* fall through with the raw URL */ }
           if (cancelled) return;
-          setPreviewUrl(_withVersion(iframeUrl, artifact?.mtime));
+          setPreviewUrl(_withVersion(iframeUrl, cacheVersion));
           if (typeof port === 'number') setBackendPort(port);
           // Fullstack apps publish from their root; the mount endpoint
           // reports the published URL from `.published.json` so the
@@ -494,7 +506,7 @@ export function ArtifactViewer({ open, artifact, onClose, onChange, onDelete, on
         }
         if (!url) throw new Error('Preview mount returned no URL');
         if (cancelled) return;
-        setPreviewUrl(_withVersion(url, artifact?.mtime));
+        setPreviewUrl(_withVersion(url, cacheVersion));
         // The mount endpoint now also reports the artifact's published
         // URL from `.published.json`. Adopt it whenever the server
         // knows of one — covers the chat-bubble / project-rail entry
