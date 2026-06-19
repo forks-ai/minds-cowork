@@ -488,7 +488,7 @@ export default function Sidebar({
               userSelect: 'none',
             }}
           >·</span>
-          <div className="anton-sidebar__wordmark">Minds</div>
+          <div className="anton-sidebar__wordmark">MindsHub Cowork</div>
         </div>
       </div>
 
@@ -548,12 +548,15 @@ export default function Sidebar({
           <NavItem icon={Ico.chats(15)} label="Channels" onClick={() => onNavigate('dispatch')} active={activeRoute === 'dispatch'} />
         </div>
 
-        {/* Anton group — visually grouped panel for the brain-style nav.
+        {/* Brain-style nav — visually grouped panel.
             Order: Memories → Skills library → Settings. Labels read
             as the things the user OWNS (plural collections) rather
-            than the abstract concepts the engine names them after. */}
-        <div className="section-label">{agentLabel || 'Anton'}</div>
-        <div className="anton-group">
+            than the abstract concepts the engine names them after.
+            No heading: the agent name (e.g. "Anton") read as
+            inconsistent branding here, and the bordered panel already
+            sets the group apart on its own. marginTop replaces the
+            spacing the section-label heading used to provide. */}
+        <div className="anton-group" style={{ marginTop: 18 }}>
           <NavItem icon={Ico.brain(15)}    label="Memories"       onClick={() => onNavigate('memory')}   active={activeRoute === 'memory'}   compact />
           <NavItem icon={Ico.cube(15)}     label="Skills library" onClick={() => onNavigate('skills')}   active={activeRoute === 'skills'}   compact />
           {/* "Connect data" removed from the sidebar — the canonical
