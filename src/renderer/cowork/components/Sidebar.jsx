@@ -554,8 +554,11 @@ export default function Sidebar({
             than the abstract concepts the engine names them after.
             No heading: the agent name (e.g. "Anton") read as
             inconsistent branding here, and the bordered panel already
-            sets the group apart on its own. marginTop replaces the
-            spacing the section-label heading used to provide. */}
+            sets the group apart on its own. marginTop gives the group
+            a deliberate top gap (matching the breathing room below it,
+            before the Pinned label) in place of the removed heading —
+            a touch tighter than the heading's own footprint, which
+            avoids leaving an empty heading-sized void. */}
         <div className="anton-group" style={{ marginTop: 18 }}>
           <NavItem icon={Ico.brain(15)}    label="Memories"       onClick={() => onNavigate('memory')}   active={activeRoute === 'memory'}   compact />
           <NavItem icon={Ico.cube(15)}     label="Skills library" onClick={() => onNavigate('skills')}   active={activeRoute === 'skills'}   compact />
