@@ -28,7 +28,7 @@ import {
   createProject as createProjectApi,
   renameProject,
   revealProjectInFinder,
-  fetchMemory, fetchArtifacts,
+  fetchMemory, fetchArtifacts, countNonEmptyMemory,
 } from '../api';
 import { Menu } from '../components/ui';
 import { useRevealOnHover } from '../hooks/useRevealOnHover';
@@ -450,12 +450,11 @@ function useRowStats(project) {
   const [mem, setMem] = useState(0);
   const [art, setArt] = useState(0);
   useEffect(() => {
-    if (!project?.path) return;
+    if (!project?.id && !project?.path) return;
     let cancelled = false;
-    fetchMemory(project.path).then((data) => {
+    fetchMemory(project).then((data) => {
       if (cancelled) return;
-      const total = (data?.sections || []).reduce((n, s) => n + (s.files?.length || 0), 0);
-      setMem(total);
+      setMem(countNonEmptyMemory(data));
     }).catch(() => {});
     fetchArtifacts().then((data) => {
       if (cancelled || !Array.isArray(data)) return;
@@ -463,7 +462,7 @@ function useRowStats(project) {
       setArt(data.filter((a) => a.path?.startsWith(prefix)).length);
     }).catch(() => {});
     return () => { cancelled = true; };
-  }, [project?.path]);
+  }, [project?.id, project?.path]);
   return { mem, art };
 }
 
