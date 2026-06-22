@@ -18,7 +18,7 @@
 // dependency, so ANTON_REF is ignored there.
 
 export const COWORK_SERVER_REPO = 'https://github.com/mindsdb/cowork-server.git';
-export const COWORK_SERVER_BRANCH = 'staging'; // Update to 'main' before merging/releasing
+// export const COWORK_SERVER_BRANCH = 'main';
 export const ANTON_REPO = 'https://github.com/mindsdb/anton.git';
 export const ANTON_PACKAGE = 'anton-agent';
 
@@ -33,8 +33,8 @@ export function getChannel(): Channel {
 }
 
 export function getCoworkRef(): string {
-  return COWORK_SERVER_BRANCH;
-  // return (process.env.COWORK_SERVER_REF || 'main').trim() || 'main';
+  // return COWORK_SERVER_BRANCH;
+  return (process.env.COWORK_SERVER_REF || 'main').trim() || 'main';
 }
 
 export function getAntonRef(): string {
