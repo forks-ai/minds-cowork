@@ -24,7 +24,7 @@ export const ANTON_PACKAGE = 'anton-agent';
 
 // Minimum version for the PyPI channel (a floor; newer compatible
 // releases are picked up automatically). Keep in sync with installer.ts.
-export const COWORK_SERVER_MIN_VERSION = '0.1.5';
+export const COWORK_SERVER_MIN_VERSION = '0.1.9';
 
 export type Channel = 'git' | 'pypi';
 
