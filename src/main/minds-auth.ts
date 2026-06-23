@@ -125,6 +125,9 @@ export async function endKeycloakSession(): Promise<void> {
 interface OrgRef {
   id: string;
   name?: string;
+  /** Raw Keycloak org name (the slug, e.g. `personal_<userId>`), distinct
+   *  from the human display name — used to spot the user's personal org. */
+  slug?: string;
   source?: string;
 }
 
@@ -150,6 +153,7 @@ function normalizeOrgRef(value: any, source: string): OrgRef | null {
   return {
     id: String(id),
     name: raw.displayName ?? raw.display_name ?? raw.name ?? undefined,
+    slug: raw.name ? String(raw.name) : undefined,
     source,
   };
 }
@@ -501,6 +505,32 @@ export async function provisionAntonApiKey(initialToken: string): Promise<Provis
         norm.permissions.api_keys.create,
         norm.allocations.deploy_agents,
       );
+    }
+
+    // Safeguard: if the active org can't mint a key (the user landed in a
+    // SHARED org where they're only a member), fall back to their PERSONAL
+    // org. The personal-org owner always has create+use (auth-side
+    // owner_roles), so this guarantees an authenticated user can get a key
+    // without weakening shared-org permissions or the paid instance gate.
+    if (!canCreateApiKeys(provisionCtx.entitlements)) {
+      const userId = typeof initialPayload?.sub === 'string' ? initialPayload.sub : '';
+      const personal = userId
+        ? (orgResult.candidates || []).find((o) => o.slug === `personal_${userId}`)
+        : undefined;
+      if (personal && personal.id !== getActiveOrgFromPayload(decodeJwtPayload(provisionToken))?.id) {
+        const switched = await switchActiveOrg(provisionToken, personal.id);
+        if (switched) {
+          const refreshed = await refreshAfterOrgSwitch();
+          if (refreshed) {
+            const personalCtx = await fetchAuthContext(refreshed);
+            if (personalCtx.ok && canCreateApiKeys(personalCtx.entitlements)) {
+              provisionToken = refreshed;
+              provisionCtx = personalCtx;
+              console.log('[minds-auth] minting in personal org (active org lacked api_keys.create)');
+            }
+          }
+        }
+      }
     }
   }
 
