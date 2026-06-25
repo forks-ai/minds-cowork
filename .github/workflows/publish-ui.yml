@@ -3,7 +3,7 @@ name: Publish UI Bundle
 on:
   push:
     branches:
-      - staging
+      - main
     paths:
       - 'src/renderer/**'
       - 'src/shared/**'
