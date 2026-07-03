@@ -1404,6 +1404,47 @@ export default function ChatView({
                 );
               }
               if (m.role === 'error') {
+                if (m.code === 'token_limit') {
+                  return (
+                    <AnswerTurn key={i} state="done" time={formatTime(m.createdAt)} showActions={false} agentLabel={agentLabel}>
+                      <div style={{
+                        border: `1px solid ${T.line}`,
+                        background: T.surface,
+                        borderRadius: 12,
+                        padding: '16px 18px',
+                        maxWidth: 520,
+                        display: 'flex', flexDirection: 'column', gap: 10,
+                      }}>
+                        <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, letterSpacing: '0.02em', color: T.ink }}>
+                          Add credits to your account or bring your own LLM
+                        </div>
+                        <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, lineHeight: 1.55, color: T.ink2 }}>
+                          You've used your MindsHub credits. Top up to keep using managed models, or connect your own provider key in Settings.
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+                          <button
+                            type="button"
+                            onClick={() => host.openExternal(MINDS_BILLING_URL)}
+                            style={{
+                              border: 'none', background: T.ink, color: 'var(--bg)',
+                              borderRadius: 8, padding: '8px 14px',
+                              fontFamily: FONT_BODY, fontSize: 13, fontWeight: 500, cursor: 'pointer',
+                            }}
+                          >Add credits</button>
+                          <button
+                            type="button"
+                            onClick={() => onOpenSettings?.()}
+                            style={{
+                              border: `1px solid ${T.line}`, background: 'transparent', color: T.ink,
+                              borderRadius: 8, padding: '8px 14px',
+                              fontFamily: FONT_BODY, fontSize: 13, fontWeight: 500, cursor: 'pointer',
+                            }}
+                          >Settings</button>
+                        </div>
+                      </div>
+                    </AnswerTurn>
+                  );
+                }
                 return (
                   <AnswerTurn key={i} state="done" time={formatTime(m.createdAt)} showActions={false} agentLabel={agentLabel}>
                     <div style={{
