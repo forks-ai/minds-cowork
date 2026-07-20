@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import Ico from './components/Icons';
-import ThemeModal from './components/ThemeModal';
 import MoveToProjectModal from './components/MoveToProjectModal';
 import { pickConnectWelcome } from './lib/connectWelcomes';
 // OnboardingShell removed — the desktop shell's renderer handles terms/install/
@@ -26,13 +25,15 @@ import SkillsView from './views/SkillsView';
 import SearchModal from './components/SearchModal';
 import ConnectorPicker from './components/connector/ConnectorPicker';
 import ServerOfflineHelpModal from './components/ServerOfflineHelpModal';
-import { setForm as setDataVaultForm, getForm as getDataVaultForm, clearForm as clearDataVaultForm, patchForm as patchDataVaultForm, getFormState as getDataVaultFormState, setFormState as setDataVaultFormState, getSelectedMethod as getDataVaultSelectedMethod, setSelectedMethod as setDataVaultSelectedMethod } from './components/datavault/formStore';
+import { setForm as setDataVaultForm, getForm as getDataVaultForm, clearForm as clearDataVaultForm, patchForm as patchDataVaultForm, getFormState as getDataVaultFormState, setFormState as setDataVaultFormState, getSelectedMethod as getDataVaultSelectedMethod, setSelectedMethod as setDataVaultSelectedMethod, subscribe as subscribeDataVaultForm } from './components/datavault/formStore';
 import { extractFormSpec } from './components/datavault/parseFormSpec';
 import { host, getAccessToken } from '../platform/host';
 import { loadSkin, persistSkin, nextSkin, skinLabel } from '../lib/skins';
 import { loadCustomTheme, persistCustomTheme, applyCustomTheme } from '../lib/customTheme';
+import { applyNavTitleColor } from '../lib/navBranding';
 import { getAgentLabel } from './lib/agentLabel';
 import { useBreakpoint } from './hooks/useBreakpoint';
+import { useGoogleDrivePicker } from './hooks/useGoogleDrivePicker';
 import { fetchSessions, fetchSession, fetchConversationList, fetchProjects, fetchArtifacts, fetchSettings, fetchHealth,
          createProject, updateSettings, streamNewSession, streamMessage,
          streamDataVaultSubmission,
@@ -42,7 +43,7 @@ import { fetchSessions, fetchSession, fetchConversationList, fetchProjects, fetc
          pauseSchedule, resumeSchedule, runScheduleNow, fetchDatasources, MOCK_DATA,
          renameConversation, deleteConversation, deleteConversationTurn, moveConversation, moveTaskToProject,
          deleteProject, cancelScratchpad, cancelResponse, fetchConnector,
-         fetchSavedConnection, deleteDatasource,
+         fetchSavedConnection, deleteDatasource, deletePickedFile,
          fetchInFlightStatus, tailInFlight, fetchInFlightList } from './api';
 import { initialStreamState, reduceStream } from './lib/responseStreamAdapter';
 import { modelLabel, recommendedModelOptions, providerValueToType } from './lib/settingsTransform';
@@ -119,6 +120,15 @@ function isPendingFileAttachment(a) {
   return !!(a && a.pendingFile instanceof File);
 }
 
+// Google-Drive-picked files aren't uploaded bytes — the agent reads them
+// directly via the connector's persisted `_picked_files` grant (see
+// cowork-server's harness integration_guidance), independent of any one
+// message. The chip is a visual confirmation only, so it must never be
+// resolved to an upload or sent as a real attachment id.
+function isReferenceOnlyAttachment(a) {
+  return !!(a && a.source === 'gdrive');
+}
+
 function isAntonConfigError(message, event) {
   const text = String(message || '');
   return (
@@ -140,7 +150,8 @@ function normalizeAntonError(message, event) {
 async function resolveComposerAttachmentsForSend(projectName, sessionId, attachments) {
   const list = Array.isArray(attachments) ? attachments : [];
   const pending = list.filter(isPendingFileAttachment);
-  const rest = list.filter((a) => !isPendingFileAttachment(a));
+  const reference = list.filter(isReferenceOnlyAttachment);
+  const rest = list.filter((a) => !isPendingFileAttachment(a) && !isReferenceOnlyAttachment(a));
   if (pending.length) {
     if (!projectName || !sessionId) {
       throw new Error('Pick a project and use a saved conversation before sending file attachments.');
@@ -154,8 +165,28 @@ async function resolveComposerAttachmentsForSend(projectName, sessionId, attachm
     const files = pending.map((p) => p.pendingFile);
     uploaded = await uploadAttachments(files, { projectName, sessionId });
   }
-  const merged = [...rest, ...uploaded];
-  return { merged, attachmentIds: merged.map((x) => x.id) };
+  // `reference` chips ride along for display (so the sent message's chat
+  // history still shows which Drive files were relevant) but are excluded
+  // from attachmentIds — there is no backend attachment record for them.
+  const resolved = [...rest, ...uploaded];
+  const merged = [...resolved, ...reference];
+  return { merged, attachmentIds: resolved.map((x) => x.id), reference };
+}
+
+// Google-Drive-picked files carry no real attachment id (see
+// isReferenceOnlyAttachment above), so unlike a normal attachment the
+// agent gets no signal at all that a message's "this file" refers to
+// one of them. Named explicitly here so Anton can resolve the
+// reference — same hidden-context pattern as describeConnectFormState.
+function describeGoogleDriveReferenceFiles(reference) {
+  if (!reference?.length) return '';
+  const lines = reference.map((f) => `- ${f.name || 'untitled'} (Drive file id: ${f.driveFileId || f.id})`);
+  return [
+    '[Google Drive files added via the picker for this message — Anton-only context, do not echo back]',
+    'The user just added the following Google Drive file(s). When they refer to "this file"/"these files" '
+      + 'in the message above, they mean these — read them with files.get(fileId=...):',
+    ...lines,
+  ].join('\n');
 }
 
 function normalizeComposerDisabledConnections(list) {
@@ -694,6 +725,9 @@ const SCHEDULE_POLL_MIN_DELAY_MS = 60 * 1000;
 const SCHEDULE_POLL_RUN_BUFFER_MS = 60 * 1000;
 
 function nextPollDelay(schedules) {
+  // A run in flight: poll at the floor so the Running state clears soon
+  // after the run finishes — nothing else refreshes it.
+  if ((schedules || []).some((s) => s.running)) return SCHEDULE_POLL_MIN_DELAY_MS;
   const dueTimes = (schedules || [])
     .filter((s) => s.enabled && s.nextRunAt)
     .map((s) => new Date(s.nextRunAt).getTime())
@@ -714,8 +748,16 @@ function AppCore() {
     tone: 'balanced',
     defaultModel: 'claude-sonnet-4-6',
     autoPin: true,
-    showDots: true,
+    // Animated dot-grid background off by default — a flat surface reads
+    // calmer and cohesive with the rest of the UI. Users can opt back in
+    // via Settings → Personalization → Animated background.
+    showDots: false,
     showCounters: true,
+    navTitle: '',
+    navTitleColor: '',
+    navLogo: '',
+    showThemeToggle: true,
+    show8bitToggle: true,
     accentVariant: 'aqua',
   });
 
@@ -746,6 +788,12 @@ function AppCore() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState('agent');
   const [ssoConnected, setSsoConnected] = useState(false);
+  // Last sign-in failure, painted on the Settings account card. Cleared
+  // on retry and on any authenticated push from main (ENG-761).
+  const [ssoError, setSsoError] = useState('');
+  // Re-entry guard: a second "Sign in" click while a browser flow is
+  // already open would spawn a second loopback attempt.
+  const ssoBusyRef = useRef(false);
   const [connectorPickerOpen, setConnectorPickerOpen] = useState(false);
   const [serverHelpOpen, setServerHelpOpen] = useState(false);
   // Pending delete confirm — task id whose delete is awaiting user
@@ -1136,10 +1184,6 @@ function AppCore() {
   // Settings → Appearance, applied as inline body token overrides.
   const [customTheme, setCustomTheme] = useState(loadCustomTheme);
 
-  // Display modal (theme + 8-bit style), opened from the bottom-right
-  // "gamepad" corner button.
-  const [themeModalOpen, setThemeModalOpen] = useState(false);
-
   // Routes that allow the sidebar to be collapsed via Cmd+B. Read via
   // a ref so the keydown listener (mounted once) sees the live route
   // without needing to rebind on every navigation.
@@ -1219,8 +1263,14 @@ function AppCore() {
   // skins are untouched.
   useEffect(() => {
     persistCustomTheme(customTheme);
-    applyCustomTheme(skin === 'custom' ? customTheme : null);
-  }, [skin, customTheme]);
+    applyCustomTheme(skin === 'custom' ? customTheme : null, theme === 'light' ? 'light' : 'dark');
+  }, [skin, customTheme, theme]);
+
+  // Sidebar title color — a synced Setting (like the greeting), independent
+  // of the skin/CustomTheme system above, so it applies in every style.
+  useEffect(() => {
+    applyNavTitleColor(settings.navTitleColor);
+  }, [settings.navTitleColor]);
 
   // Mirror the Dot grid setting to a body class so the gravity-field
   // canvas can be hidden via CSS. `display: none` also lets the
@@ -1231,10 +1281,18 @@ function AppCore() {
     document.body.classList.toggle('gf-dots-off', settings.showDots === false);
   }, [settings.showDots]);
 
-  const [route, setRoute] = useState('home');         // home | task | projects | scheduled | schedule-detail | artifacts | dispatch | customize
+  const [route, setRoute] = useState('home');         // home | task | projects | scheduled | schedule-detail | artifacts | channels | customize
   // Keep a ref of the live route so the keydown listener (bound
   // once on mount) can read it without a re-bind on every nav.
   routeRef.current = route;
+  // Route-aware gravity-field intensity: dense work surfaces quiet the
+  // light-mode field (gf-quiet + gravity-field.css) so it never competes
+  // with content; the home stage keeps the full ambient motion.
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    document.body.classList.toggle('gf-quiet', route !== 'home');
+    return () => document.body.classList.remove('gf-quiet');
+  }, [route]);
   // Effective collapse state: only honor the user's preference while
   // the route allows it (chat task). Everywhere else the sidebar
   // stays expanded — gives the user permanent access to the nav.
@@ -2193,7 +2251,29 @@ function AppCore() {
       // No registry entry — fall back to the chat-agent flow.
       Promise.resolve().then(() => handleSendFromHome(`Connect ${label}`));
     }
+    return tempId;
   };
+
+  const {
+    driveAccountChoice,
+    driveConnectPrompt,
+    resolveDriveAccountChoice,
+    cancelDriveAccountChoice,
+    confirmDriveConnect,
+    cancelDriveConnect,
+    handleAddGoogleDriveFiles,
+    handleAddGoogleDriveProjectFiles,
+    fetchGoogleDriveReferenceFiles,
+    removeGoogleDriveFileReference,
+  } = useGoogleDrivePicker({
+    selectedProject,
+    currentTask,
+    setComposerAttachments,
+    setActiveTaskId,
+    setRoute,
+    handleConnectorPicked,
+  });
+
   // Keep the ref synced so the Cmd/Ctrl+N keydown handler always calls
   // the latest newTask closure (which captures fresh setRoute/setTasks).
   useEffect(() => { newTaskRef.current = newTask; });
@@ -2207,13 +2287,46 @@ function AppCore() {
     getAccessToken().then((token) => setSsoConnected(!!token)).catch(() => {});
   }, [settingsOpen]);
 
+  // Authoritative signed-in state, pushed from the main process on every
+  // token-store transition (login, silent refresh, logout, session
+  // death). The UI no longer depends solely on the promise of whichever
+  // call initiated the sign-in — that promise can be lost (ENG-761)
+  // while the main process is in fact authenticated, or vice versa.
+  useEffect(() => {
+    if (!host.isElectron) return undefined;
+    return host.onMindsHubAuthChanged(({ authenticated }) => {
+      setSsoConnected(!!authenticated);
+      if (authenticated) setSsoError('');
+    });
+  }, []);
+
   const handleSsoSignIn = async () => {
-    if (!host.isElectron) return;
-    const loginResult = await host.mindshubLogin();
-    if (!loginResult?.ok) return;
-    await host.mindshubFinalize().catch(() => {});
-    setSsoConnected(true);
-    refreshData();
+    if (!host.isElectron || ssoBusyRef.current) return;
+    ssoBusyRef.current = true;
+    setSsoError('');
+    try {
+      const loginResult = await host.mindshubLogin();
+      if (!loginResult?.ok) {
+        // ENG-761: this used to silently return — the browser said
+        // "You're authorized!" while the app showed nothing. Surface the
+        // failure where the user will look for it: the account card.
+        setSsoError(String(loginResult?.reason || 'Sign in failed. Please try again.'));
+        setSettingsSection('account');
+        setSettingsOpen(true);
+        return;
+      }
+      // Signed in — flip the UI now; key provisioning below takes several
+      // seconds (org bootstrap + server restart) and is not a sign-in gate.
+      setSsoConnected(true);
+      try {
+        await host.mindshubFinalize();
+      } catch (e) {
+        console.warn('[sso] finalize failed after sign-in (account is authenticated):', e);
+      }
+      refreshData();
+    } finally {
+      ssoBusyRef.current = false;
+    }
   };
 
   const navigate = (key) => {
@@ -2285,7 +2398,7 @@ function AppCore() {
   const handleRemoveAttachment = async (id) => {
     const target = composerAttachments.find((a) => a.id === id);
     setComposerAttachments((prev) => prev.filter((attachment) => attachment.id !== id));
-    if (target?.pendingFile) return;
+    if (target?.pendingFile || isReferenceOnlyAttachment(target)) return;
     try {
       await deleteAttachment(id);
     } catch {
@@ -2375,11 +2488,12 @@ function AppCore() {
     const hasPendingFiles = rawComposer.some(isPendingFileAttachment);
     const taskId = hasPendingFiles ? allocateConversationId() : `tmp-${Date.now()}`;
 
-    const { merged: sendingAttachments, attachmentIds } = await resolveComposerAttachmentsForSend(
+    const { merged: sendingAttachments, attachmentIds, reference } = await resolveComposerAttachmentsForSend(
       effectiveProjectName,
       hasPendingFiles ? taskId : null,
       rawComposer,
     );
+    const sendText = reference.length ? `${text}\n\n${describeGoogleDriveReferenceFiles(reference)}` : text;
     setComposerAttachments([]);
 
     // Two-phase send so the new-task experience matches the in-chat
@@ -2484,7 +2598,7 @@ function AppCore() {
     trackAgentSessionStarted();
     trackFirstQuery();
     const streamGen = activeStreamGenerationRef.current;
-    const streamNewSessionFn = () => streamNewSession(text, {
+    const streamNewSessionFn = () => streamNewSession(sendText, {
       conversationId: hasPendingFiles ? taskId : undefined,
       projectName: effectiveProjectName,
       projectPath: effectiveProjectPath,
@@ -2655,9 +2769,9 @@ function AppCore() {
       || null;
     const taskModel = currentTask.model || selectedModel?.id || null;
 
-    let sendingAttachments, attachmentIds;
+    let sendingAttachments, attachmentIds, driveReference;
     try {
-      ({ merged: sendingAttachments, attachmentIds } = await resolveComposerAttachmentsForSend(
+      ({ merged: sendingAttachments, attachmentIds, reference: driveReference } = await resolveComposerAttachmentsForSend(
         taskProjectName,
         id,
         // A drained queued item carries its own attachments; only a
@@ -2756,7 +2870,9 @@ function AppCore() {
      // keeps the original text — Anton-only context, never shown.
     const connectFormState = getDataVaultFormState(id);
     const connectContext = describeConnectFormState(connectFormState);
-    const sendText = connectContext ? `${text}\n\n${connectContext}` : text;
+    const driveContext = describeGoogleDriveReferenceFiles(driveReference);
+    const hiddenContext = [connectContext, driveContext].filter(Boolean).join('\n\n');
+    const sendText = hiddenContext ? `${text}\n\n${hiddenContext}` : text;
 
     // Tag this task as currently streaming so reconcileTaskMessages
     // can distinguish a real in-flight turn from a zombie placeholder.
@@ -3207,12 +3323,33 @@ function AppCore() {
   };
   const performDeleteProject = async (project) => {
     if (!project?.name) return;
+    // The server cascades a project delete to its conversations (ENG-701),
+    // so tombstone their ids the same way performDeleteTask does for a single
+    // delete. Without this, an in-flight fetchSessions that started before the
+    // delete resolves with stale data, and mergeTasksFromServer's carry-over
+    // re-adds the (now server-deleted) conversations — leaving a "ghost" that
+    // opens but errors on send, until an app restart (ENG-666). Match by name
+    // OR path: the server stamps conv.project = project.name (and project_path
+    // = project.path), so this catches every conversation in the project.
+    const doomedTaskIds = tasksRef.current
+      .filter((t) => t.projectName === project.name || t.projectPath === project.path)
+      .map((t) => t.id);
+    doomedTaskIds.forEach((id) => deletedTaskIdsRef.current.add(id));
     // Optimistic — drop locally before the round-trip.
     setProjects((prev) => prev.filter((p) => p.name !== project.name));
     setTasks((prev) => prev.filter((t) =>
       t.projectName !== project.name && t.projectPath !== project.path
     ));
     if (selectedProject?.name === project.name) setSelectedProject(null);
+    // If the conversation currently open belonged to this project, clear it —
+    // otherwise currentTask silently falls back to tasks[0] (an unrelated
+    // conversation from another project). Only leave the chat view when we're
+    // actually on it; from the projects view (where deletes usually happen)
+    // the user should stay put — same policy as performDeleteTask.
+    if (activeTaskId && doomedTaskIds.includes(activeTaskId)) {
+      setActiveTaskId(null);
+      if (route === 'task') setRoute('home');
+    }
     try { await deleteProject(project); } catch (e) {
       // eslint-disable-next-line no-console
       console.error('[performDeleteProject] failed', e);
@@ -3295,12 +3432,14 @@ function AppCore() {
     });
   }, []);
 
-  // Recomputed whenever an enabled schedule's due time changes — used as
-  // the poll effect's dependency below instead of `scheduled.length`,
-  // which stays the same across an edit/pause/resume
+  // Recomputed whenever an enabled schedule's due time or running state
+  // changes — used as the poll effect's dependency below instead of
+  // `scheduled.length`, which stays the same across an edit/pause/resume.
+  // The running flag matters: when "Run now" flips it on, the pending long
+  // timer must be replaced with the tight in-flight cadence.
   const scheduleKey = scheduled
-    .filter((s) => s.enabled)
-    .map((s) => s.nextRunAt)
+    .filter((s) => s.enabled || s.running)
+    .map((s) => `${s.nextRunAt}:${s.running ? 1 : 0}`)
     .join(',');
 
   // Self-adjusting poll (not a fixed interval): reschedules itself after
@@ -3351,9 +3490,12 @@ function AppCore() {
     const result = await runScheduleNow(id);
     // The server creates the conversation eagerly and returns its id.
     // Mark it in-flight locally so reconcileTaskMessages doesn't inject
-    // a spurious "got interrupted" prompt before the 5s poll catches up.
+    // a spurious "got interrupted" prompt before the 5s poll catches up,
+    // then navigate straight to the new run so the user sees it stream.
     if (result?.conversation_id) {
       markInFlight(result.conversation_id);
+      setActiveTaskId(result.conversation_id);
+      setRoute('task');
     }
     await refreshSchedules();
     refreshData();
@@ -3478,9 +3620,31 @@ function AppCore() {
           connectorsCount={connectors.length}
           activeRoute={route === 'task' ? null : (route === 'schedule-detail' ? 'scheduled' : route)}
           settingsActive={settingsOpen}
-          activeTaskId={activeTaskId}
+          // Only mark a recent as "selected" while actually viewing a task —
+          // activeTaskId persists across navigation, so passing it unconditionally
+          // left the last-opened task highlighted on Projects/Settings/etc.
+          activeTaskId={route === 'task' ? activeTaskId : null}
           serverOnline={serverOnline}
           agentLabel={agentLabel}
+          theme={theme}
+          onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+          skin={skin}
+          // While a Custom theme is active, the sidebar's "8-bit" button
+          // can't flip `skin` straight to '8bit'/'normal' — that would
+          // silently discard the CustomTheme recipe (it only applies while
+          // skin === 'custom'). Repurpose the same button to toggle just
+          // the mono/8-bit font instead, so it stays meaningful without
+          // resetting anything.
+          onToggleSkin={() => {
+            if (skin === 'custom') {
+              setCustomTheme((prev) => ({ ...prev, font: prev.font === 'mono' ? 'standard' : 'mono' }));
+            } else {
+              setSkin(skin === '8bit' ? 'normal' : '8bit');
+            }
+          }}
+          is8bitActive={skin === 'custom' ? customTheme.font === 'mono' : skin !== 'normal'}
+          showThemeToggle={settings.showThemeToggle !== false}
+          show8bitToggle={settings.show8bitToggle !== false}
           onNavigate={navigate}
           onSelectTask={selectTask}
           onNewTask={newTask}
@@ -3509,6 +3673,8 @@ function AppCore() {
           serverBusy={serverBusy}
           serverBusyKind={serverBusyKind}
           showCounters={settings.showCounters !== false}
+          navTitle={settings.navTitle || null}
+          navLogo={settings.navLogo || null}
           updateAvailable={updateStatus?.phase === 'available' ? { version: updateStatus.version } : null}
           onApplyUpdate={handleApplyUpdate}
           onShowServerHelp={() => { setSettingsSection('backend'); setSettingsOpen(true); }}
@@ -3579,6 +3745,7 @@ function AppCore() {
             connectors={connectors}
             onNavigateToConnectors={() => navigate('customize')}
             onAttachFiles={handleAttachFiles}
+            onAddGoogleDriveFiles={handleAddGoogleDriveFiles}
             onRemoveAttachment={handleRemoveAttachment}
             disabledConnections={composerDisabledConnections}
             onUpdateConnectorMute={handleComposerConnectorMute}
@@ -3612,6 +3779,10 @@ function AppCore() {
             attachments={composerAttachments}
             connectors={connectors}
             onAttachFiles={handleAttachFiles}
+            onAddGoogleDriveFiles={handleAddGoogleDriveFiles}
+            onAddGoogleDriveProjectFiles={handleAddGoogleDriveProjectFiles}
+            onFetchGoogleDriveProjectFiles={fetchGoogleDriveReferenceFiles}
+            onRemoveGoogleDriveProjectFile={removeGoogleDriveFileReference}
             disabledConnections={composerDisabledConnections}
             onRemoveAttachment={handleRemoveAttachment}
             onUpdateConnectorMute={handleComposerConnectorMute}
@@ -3667,6 +3838,10 @@ function AppCore() {
             connectors={connectors}
             onNavigateToConnectors={() => navigate('customize')}
             onAttachFiles={handleAttachFiles}
+            onAddGoogleDriveFiles={handleAddGoogleDriveFiles}
+            onAddGoogleDriveProjectFiles={handleAddGoogleDriveProjectFiles}
+            onFetchGoogleDriveProjectFiles={fetchGoogleDriveReferenceFiles}
+            onRemoveGoogleDriveProjectFile={removeGoogleDriveFileReference}
             onRemoveAttachment={handleRemoveAttachment}
             disabledConnections={composerDisabledConnections}
             onUpdateConnectorMute={handleComposerConnectorMute}
@@ -3780,6 +3955,10 @@ function AppCore() {
         )}
 
 
+        {route === 'channels' && (
+          <ChannelsView />
+        )}
+
         {route === 'customize' && (
           <CustomizeView
             connectors={connectors}
@@ -3833,6 +4012,7 @@ function AppCore() {
               onStartServer={handleServerStart}
               onStopServer={handleServerStop}
               isSsoConnected={ssoConnected}
+              ssoError={ssoError}
               onSsoSignIn={!ssoConnected && host.isElectron ? async () => { setSettingsOpen(false); await handleSsoSignIn(); } : undefined}
             />
           </ModalBody>
@@ -3901,6 +4081,8 @@ function AppCore() {
               window.dispatchEvent(new CustomEvent('anton:open-new-project'));
             }, 60);
           }}
+          navTitle={settings.navTitle || null}
+          navLogo={settings.navLogo || null}
         >
           {mainEl}
         </MobileShell>
@@ -3977,45 +4159,6 @@ function AppCore() {
         }}
       />
 
-      {/* Floating theme + display toggles (bottom-right). Hidden on the
-          Settings page — it has its own theme/style controls, and the
-          floating buttons otherwise overlap the Save button there. */}
-      {route !== 'settings' && (
-        <>
-          <button
-            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-            aria-label="Toggle colour theme"
-            className="floating-theme-toggle"
-            style={{ WebkitAppRegion: 'no-drag' }}
-          >
-            {theme === 'dark' ? Ico.sun(15) : Ico.moon(15)}
-          </button>
-
-          {/* Style toggle — stacked above the theme toggle. Flips directly
-              between 8-bit arcade and smooth (like the sun/moon theme
-              toggle). The icon shows the destination style. */}
-          <button
-            onClick={() => setSkin(skin === '8bit' ? 'normal' : '8bit')}
-            title={skin === '8bit' ? 'Switch 8-bit arcade style off' : 'Switch style to 8-Bit Arcade mode'}
-            aria-label="Toggle 8-bit arcade style"
-            className="floating-theme-toggle floating-skin-toggle"
-            style={{ WebkitAppRegion: 'no-drag' }}
-          >
-            {Ico.gamepad(15)}
-          </button>
-        </>
-      )}
-
-      <ThemeModal
-        open={themeModalOpen}
-        onClose={() => setThemeModalOpen(false)}
-        theme={theme}
-        onThemeChange={setTheme}
-        skin={skin}
-        onSkinChange={setSkin}
-      />
-
       <MoveToProjectModal
         open={!!moveModalTask}
         task={moveModalTask}
@@ -4023,6 +4166,60 @@ function AppCore() {
         onClose={() => setMoveModalTask(null)}
         onConfirm={handleConfirmMove}
       />
+
+      {/* Shown when picking/attaching Google Drive files with no
+          google_drive connection yet — see useGoogleDrivePicker. */}
+      <ConfirmModal
+        open={!!driveConnectPrompt}
+        title="Connect Google Drive?"
+        message="You need to connect your Google Drive account to add files from Drive."
+        confirmLabel="Connect"
+        cancelLabel="Cancel"
+        onConfirm={confirmDriveConnect}
+        onClose={cancelDriveConnect}
+      />
+
+      {/* Shown when picking/attaching Google Drive files and more than
+          one google_drive connection exists — see useGoogleDrivePicker. */}
+      <Modal
+        open={!!driveAccountChoice}
+        onClose={cancelDriveAccountChoice}
+        size="sm"
+        labelledBy="gdrive-account-picker-title"
+      >
+        <ModalHeader
+          id="gdrive-account-picker-title"
+          title="Choose a Google Drive account"
+          subtitle="More than one Google Drive account is connected — pick which one to use."
+          onClose={cancelDriveAccountChoice}
+        />
+        <ModalBody>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {(driveAccountChoice?.connections || []).map((c) => (
+              <button
+                key={c.name}
+                type="button"
+                onClick={() => resolveDriveAccountChoice(c)}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '10px 12px', borderRadius: 8,
+                  border: '1px solid var(--border-subtle)',
+                  background: 'var(--surface)',
+                  color: 'var(--ink)',
+                  fontFamily: 'var(--font-body)', fontSize: 13.5,
+                  cursor: 'pointer', textAlign: 'left',
+                  transition: 'background 120ms ease',
+                }}
+                onMouseOver={(e) => { e.currentTarget.style.background = 'var(--surface-2)'; }}
+                onMouseOut={(e) => { e.currentTarget.style.background = 'var(--surface)'; }}
+              >
+                <span style={{ color: 'var(--ink-3)', display: 'inline-flex', flexShrink: 0 }}>{Ico.googleDrive(16)}</span>
+                <span>{c.display_name || c.name}</span>
+              </button>
+            ))}
+          </div>
+        </ModalBody>
+      </Modal>
 
       {/* OAuth refresh-error toasts — shown when background token refresh fails */}
       {refreshErrors.length > 0 && (

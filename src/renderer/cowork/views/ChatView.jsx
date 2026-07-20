@@ -1,6 +1,6 @@
 /* Anton Chat — Direction A: Conservative.
    Near-1:1 port of docs/design-guidelines/chat.html (ChatConservative).
-   Editorial, document-like. Inter body, Josefin display, mono for operator
+   Editorial, document-like. Inter body, Inter headings, mono for operator
    metadata. Centered ~720px column, OrbitMorph-led Anton turns, floating
    composer, right rail with collapsible cards.
 
@@ -12,7 +12,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalS
 import { createPortal } from 'react-dom';
 import Ico from '../components/Icons';
 import Composer from '../components/Composer';
-import { Message } from '../components/ui';
+import { Message, Card } from '../components/ui';
 import { MarkdownContent } from '../components/markdown/MarkdownContent';
 import { ThinkingBlock } from '../components/thinking/ThinkingBlock';
 import { WorkingIndicator } from '../components/thinking/WorkingIndicator';
@@ -54,8 +54,8 @@ const T = {
   success:  '#1F8F5F',
 };
 
-const FONT_DISPLAY = "'Josefin Sans', sans-serif";
-const FONT_MONO    = "'JetBrains Mono', monospace";
+const FONT_DISPLAY = "var(--font-display, 'Inter', sans-serif)";
+const FONT_MONO    = "var(--font-mono)";
 const FONT_BODY    = "'Inter', system-ui, sans-serif";
 
 // ─── small shared atoms ──────────────────────────────────────────────────
@@ -222,7 +222,7 @@ function ConnectIntroBubble({ title, connector, onHoverChange, modify = false, o
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
             <span style={{
               fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 14,
-              color: T.ink, letterSpacing: '-0.005em',
+              color: T.ink, letterSpacing: '0',
             }}>{title}</span>
             <span style={{
               fontFamily: FONT_BODY, fontSize: 12.5, color: T.ink3,
@@ -615,34 +615,14 @@ function ArtifactCard({ artifact, onOpen }) {
   // behaviour. Cursor + hover lift mark the entire surface as
   // interactive at a glance.
   return (
-    <div
-      role="button"
-      tabIndex={canAct ? 0 : -1}
+    <Card
+      as="div"
+      interactive={canAct}
+      padding="cozy"
+      onActivate={canAct ? handleOpen : undefined}
       aria-label={canAct ? `Open preview: ${artifact.title}` : disabledReason || 'No file path'}
-      onClick={() => { if (canAct) handleOpen(); }}
-      onKeyDown={(e) => {
-        if (!canAct) return;
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleOpen(); }
-      }}
       style={{
         display: 'grid', gridTemplateColumns: '64px 1fr auto', alignItems: 'center', gap: 16,
-        background: T.surface, border: `1px solid ${T.line}`,
-        borderRadius: 14, padding: '14px 16px',
-        boxShadow: '0 1px 0 rgba(15,16,17,0.02), 0 8px 20px rgba(15,16,17,0.04)',
-        cursor: canAct ? 'pointer' : 'default',
-        transition: 'border-color 140ms ease, transform 140ms ease, box-shadow 140ms ease',
-        outline: 'none',
-      }}
-      onMouseOver={(e) => {
-        if (!canAct) return;
-        e.currentTarget.style.borderColor = T.accent;
-        e.currentTarget.style.transform = 'translateY(-1px)';
-        e.currentTarget.style.boxShadow = '0 1px 0 rgba(15,16,17,0.02), 0 12px 26px rgba(15,16,17,0.06)';
-      }}
-      onMouseOut={(e) => {
-        e.currentTarget.style.borderColor = T.line;
-        e.currentTarget.style.transform = 'translateY(0)';
-        e.currentTarget.style.boxShadow = '0 1px 0 rgba(15,16,17,0.02), 0 8px 20px rgba(15,16,17,0.04)';
       }}
     >
       <div style={{
@@ -666,7 +646,7 @@ function ArtifactCard({ artifact, onOpen }) {
             all: 'unset',
             cursor: canAct ? 'pointer' : 'not-allowed',
             fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 16, color: T.ink,
-            letterSpacing: '0.01em',
+            letterSpacing: '0',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             display: 'block', minWidth: 0,
             transition: 'color 120ms ease',
@@ -751,7 +731,7 @@ function ArtifactCard({ artifact, onOpen }) {
           </SmallBtn>
         )}
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -846,7 +826,7 @@ function ActionCard({ time, agentLabel, title, body, buttons = [] }) {
         border: `1px solid ${T.line}`, background: T.surface, borderRadius: 12,
         padding: '16px 18px', maxWidth: 520, display: 'flex', flexDirection: 'column', gap: 10,
       }}>
-        <div style={{ fontFamily: FONT_DISPLAY, fontSize: 15, letterSpacing: '0.02em', color: T.ink }}>
+        <div className="s-h3" style={{ color: T.ink }}>
           {title}
         </div>
         <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, lineHeight: 1.55, color: T.ink2 }}>
@@ -1005,6 +985,10 @@ export default function ChatView({
   attachments,
   connectors,
   onAttachFiles,
+  onAddGoogleDriveFiles,
+  onAddGoogleDriveProjectFiles,
+  onFetchGoogleDriveProjectFiles,
+  onRemoveGoogleDriveProjectFile,
   disabledConnections,
   onUpdateConnectorMute,
   onRemoveAttachment,
@@ -1378,8 +1362,12 @@ export default function ChatView({
                   autoCorrect="off"
                   style={{
                     flex: '1 1 0', minWidth: 0,
-                    fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 14,
-                    letterSpacing: '0.04em', color: T.ink,
+                    // Match the breadcrumb links (Crumb = 13px) — this is the
+                    // current crumb, so it's a CrumbCurrent sibling in every
+                    // way but its interactivity (click opens the task menu,
+                    // dbl-click edits), hence not the component itself.
+                    fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 13,
+                    letterSpacing: '0', color: T.ink,
                     background: 'var(--surface-2)',
                     border: '1px solid var(--accent)',
                     borderRadius: 5, padding: '2px 6px', outline: 'none',
@@ -1406,8 +1394,8 @@ export default function ChatView({
                     }
                   }}
                   style={{
-                    fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 14,
-                    letterSpacing: '0.04em', color: T.ink,
+                    fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 13,
+                    letterSpacing: '0', color: T.ink,
                     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     overflowWrap: 'anywhere',
                     minWidth: 0, flex: '0 1 auto',
@@ -1898,6 +1886,7 @@ export default function ChatView({
             connectors={connectors}
             onNavigateToConnectors={onNavigateToConnectors}
             onAttachFiles={onAttachFiles}
+            onAddGoogleDriveFiles={onAddGoogleDriveFiles}
             conversationId={task.id}
             disabledConnections={disabledConnections ?? task.disabledConnections ?? []}
             onUpdateConnectorMute={onUpdateConnectorMute}
@@ -2000,6 +1989,9 @@ export default function ChatView({
           project={project}
           conversationId={task?.id}
           refreshKey={contextRefreshKey}
+          onAddGoogleDriveFiles={onAddGoogleDriveProjectFiles}
+          onFetchGoogleDriveFiles={onFetchGoogleDriveProjectFiles}
+          onRemoveGoogleDriveFile={onRemoveGoogleDriveProjectFile}
         />
       </aside>
 

@@ -142,4 +142,140 @@ describe('electron mode (bridge present)', () => {
     host = await importHost();
     await expect(host.getUIVersion()).resolves.toBe('2.0.0');
   });
+
+  it('pickDriveFiles delegates to the bridge and returns its result', async () => {
+    const oauthPickDriveFiles = vi.fn(async () => ({ ok: true, files: [], newFiles: [] }));
+    (window as unknown as Record<string, unknown>).antontron = { oauthPickDriveFiles };
+    const host = await importHost();
+
+    const result = await host.pickDriveFiles('google_drive', 'my-conn', 'me@example.com', ['id1'], 'proj-1');
+    expect(oauthPickDriveFiles).toHaveBeenCalledWith({
+      engine: 'google_drive',
+      name: 'my-conn',
+      accountEmail: 'me@example.com',
+      fileIds: ['id1'],
+      projectName: 'proj-1',
+    });
+    expect(result).toEqual({ ok: true, files: [], newFiles: [] });
+  });
+
+  it('pickDriveFiles and cancelDrivePicker fall back to unsupported/no-op on web or a partial bridge', async () => {
+    let host = await importHost(); // no bridge at all → web mode
+    await expect(host.pickDriveFiles('google_drive', 'c', 'e@x.com')).resolves.toEqual({
+      ok: false,
+      reason: 'Google Picker is Electron-only for now.',
+    });
+    await expect(host.cancelDrivePicker()).resolves.toBeUndefined();
+
+    (window as unknown as Record<string, unknown>).antontron = {}; // bridge present, method missing
+    host = await importHost();
+    await expect(host.pickDriveFiles('google_drive', 'c', 'e@x.com')).resolves.toMatchObject({ ok: false });
+    await expect(host.cancelDrivePicker()).resolves.toBeUndefined();
+  });
+
+  it('cancelDrivePicker calls the bridge when present', async () => {
+    const oauthCancelPicker = vi.fn(async () => {});
+    (window as unknown as Record<string, unknown>).antontron = { oauthCancelPicker };
+    const host = await importHost();
+
+    await host.cancelDrivePicker();
+    expect(oauthCancelPicker).toHaveBeenCalledOnce();
+  });
+  
+  it('getVersionInfo reports app/ui/source distinctly (OTA never masks the shell)', async () => {
+    // OTA active: ui is the cached bundle, app is the installed shell — kept
+    // separate so the App row can't drift to the OTA version (ENG-213 / G1).
+    (window as unknown as Record<string, unknown>).antontron = {
+      getUIVersion: async () => ({ app: '2.26.7.6.1', ui: '2.26.7.13.1', source: 'ota' }),
+    };
+    let host = await importHost();
+    await expect(host.getVersionInfo()).resolves.toEqual({
+      app: '2.26.7.6.1', ui: '2.26.7.13.1', source: 'ota',
+    });
+
+    // Bundled: no OTA cache → ui null, source 'bundled'.
+    (window as unknown as Record<string, unknown>).antontron = {
+      getUIVersion: async () => ({ app: '2.26.7.6.1', ui: null, source: 'bundled' }),
+    };
+    host = await importHost();
+    await expect(host.getVersionInfo()).resolves.toEqual({
+      app: '2.26.7.6.1', ui: null, source: 'bundled',
+    });
+  });
+
+  it('getVersionInfo degrades to web facts when the bridge lacks the method', async () => {
+    (window as unknown as Record<string, unknown>).antontron = {}; // partial bridge
+    const host = await importHost();
+    await expect(host.getVersionInfo()).resolves.toEqual({ app: '', ui: null, source: 'web' });
+  });
+
+  it('getVersionInfo normalizes legacy shells that omit `source`', async () => {
+    // Old bundled shape: `ui: 'bundled'` sentinel, no `source`. The sentinel is
+    // not a version → ui null, source bundled (not the literal "bundled").
+    (window as unknown as Record<string, unknown>).antontron = {
+      getUIVersion: async () => ({ app: '2.26.7.6.1', ui: 'bundled' }),
+    };
+    let host = await importHost();
+    await expect(host.getVersionInfo()).resolves.toEqual({
+      app: '2.26.7.6.1', ui: null, source: 'bundled',
+    });
+
+    // Old OTA shape: a real `ui` version but no `source` → infer OTA.
+    (window as unknown as Record<string, unknown>).antontron = {
+      getUIVersion: async () => ({ app: '2.26.7.6.1', ui: '2.26.7.13.1' }),
+    };
+    host = await importHost();
+    await expect(host.getVersionInfo()).resolves.toEqual({
+      app: '2.26.7.6.1', ui: '2.26.7.13.1', source: 'ota',
+    });
+  });
+});
+
+describe('web settings access — loopback-gated /raw (ENG-817)', () => {
+  // In the console-hosted web build the browser reaches cowork-server from the
+  // docker bridge, not loopback, so /settings/raw 403s. The .env is legacy and
+  // the DB is authoritative, so these reads/writes must degrade, not throw —
+  // otherwise boot/onboarding aborts (ENG-817).
+  function stubStatus(status: number, detail = 'err') {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status, json: async () => ({ detail }) })),
+    );
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('readSettings degrades to {} on the expected loopback 403', async () => {
+    stubStatus(403, 'local requests only');
+    const host = await importHost();
+    await expect(host.readSettings()).resolves.toEqual({});
+  });
+
+  it('saveSettings returns false (does not throw) on the expected loopback 403', async () => {
+    stubStatus(403, 'local requests only');
+    const host = await importHost();
+    await expect(host.saveSettings('ANTON_TERMS_CONSENT=true')).resolves.toBe(false);
+  });
+
+  // Only the loopback 403 is degraded; real failures must stay observable so
+  // onboarding can't report success over a failed write / read stale-empty.
+  it('readSettings REJECTS on a non-403 failure (e.g. 500) — not silently empty', async () => {
+    stubStatus(500);
+    const host = await importHost();
+    await expect(host.readSettings()).rejects.toThrow();
+  });
+
+  it('saveSettings REJECTS on a non-403 failure (e.g. 500) — not silently false', async () => {
+    stubStatus(500);
+    const host = await importHost();
+    await expect(host.saveSettings('ANTON_X=1')).rejects.toThrow();
+  });
+
+  it('saveSettings REJECTS on a network error (fetch throws) — not silently false', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('network down'); }));
+    const host = await importHost();
+    await expect(host.saveSettings('ANTON_X=1')).rejects.toThrow();
+  });
 });

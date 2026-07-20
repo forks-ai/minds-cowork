@@ -29,6 +29,11 @@ describe('Button', () => {
     expect(screen.getByRole('button', { name: 'Odd' })).toHaveClass('btn', { exact: true });
   });
 
+  it('renders the solid variant (filled page CTA) with its class', () => {
+    render(<Button variant="solid">Publish</Button>);
+    expect(screen.getByRole('button', { name: 'Publish' })).toHaveClass('btn', 'solid', { exact: true });
+  });
+
   it('forwards rest props: click handlers fire, disabled blocks them', async () => {
     const user = userEvent.setup();
     const onClick = vi.fn();
@@ -45,5 +50,13 @@ describe('Button', () => {
     await user.click(screen.getByRole('button', { name: 'Frozen' }));
     expect(onClick).toHaveBeenCalledTimes(1); // unchanged
     expect(screen.getByRole('button', { name: 'Frozen' })).toBeDisabled();
+  });
+
+  it('forwards its ref to the underlying <button> (so it can back a Base UI Menu trigger)', () => {
+    const ref = { current: null };
+    render(<Button ref={ref}>Trigger</Button>);
+    const btn = screen.getByRole('button', { name: 'Trigger' });
+    expect(ref.current).toBe(btn);
+    expect(ref.current).toBeInstanceOf(HTMLButtonElement);
   });
 });

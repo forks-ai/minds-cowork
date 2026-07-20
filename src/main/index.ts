@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, net, session, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, net, powerMonitor, session, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -6,22 +6,26 @@ import * as https from 'https';
 import * as http from 'http';
 import { IPC } from '../shared/ipc-channels';
 import { checkInstallStatus, runInstaller } from './installer';
-import { startServer, stopServer, isServerRunning, isServerStarting, getServerPort, getServerDiagnostics, getServerLogPath, resolveServerPort } from './server-process';
+import { startServer, stopServer, isServerRunning, isServerStarting, getServerPort, getServerDiagnostics, getServerLogPath, resolveServerPort, fetchServerVersions } from './server-process';
 import { setUpdateNotifier, recreateVenvIfUnsupportedPython, repairServerInstall } from './server-updater';
 import { initUpdater, registerUpdateHandlers } from './updater';
 import { oauthConnect, cancelCurrentOAuth } from './oauth-service';
 import { setRefreshToken, deleteRefreshToken, getRefreshToken as getOAuthRefreshToken } from './keychain-service';
 import { OAUTH_CREDENTIALS } from './credentials';
-import { startRefreshLoop, stopRefreshLoop, stopAllRefreshLoops, revokedConnections } from './token-refresh';
-import { saveTokens, getAccessToken, getRefreshToken, clearTokens, migrateRefreshTokenStore } from './token-store';
-import { silentRefresh, refreshTokensOnly, writeMindsKeyToEnvAndRestart, provisionAntonApiKey, scheduleRefresh, endKeycloakSession, KEYCLOAK_AUTH_URL, KEYCLOAK_TOKEN_URL } from './minds-auth';
+import { startRefreshLoop, stopRefreshLoop, stopAllRefreshLoops, revokedConnections, getPickerAccess } from './token-refresh';
+import { fetchAccountEmail } from './oauth-identity';
+import { openDrivePickerFlow, cancelCurrentDrivePicker, isValidDriveFileIds } from './drive-picker-service';
+import { getPickedFiles, savePickedFiles, verifyPickedFiles, type PickedFile } from './picked-files';
+import { saveTokens, getAccessToken, getRefreshToken, clearTokens, migrateRefreshTokenStore, isAccessTokenExpired } from './token-store';
+import { refreshTokensOnly, writeMindsKeyToEnvAndRestart, provisionAntonApiKey, scheduleRefresh, cancelScheduledRefresh, endKeycloakSession, KEYCLOAK_AUTH_URL, KEYCLOAK_TOKEN_URL } from './minds-auth';
 import { MINDS_API_HOST } from './minds-urls';
 import { sendEvent } from './analytics';
-import { getRendererPath, getBundledPath, checkForUIUpdate, applyUIUpdate, hasInternet, getCachedVersion } from './ui-updater';
+import { getRendererPath, getBundledPath, checkForUIUpdate, applyUIUpdate, hasInternet, getCachedVersion, isServingOta, rollbackUI } from './ui-updater';
 import type { UpdateCheckResult } from './ui-updater';
 import { coworkHome, coworkEnvPath, coworkStatePath, migrateLegacyHome, readEnvFile } from './cowork-home';
 import { getServerAuthToken, authHeader, resetServerAuthTokenCache } from './server-auth';
 import { getAppDisplayVersion } from './server-source';
+import { unifiedVersion, SKEW_WARN_DAYS } from '../shared/version';
 
 function getAntonEnvPath(): string {
   return coworkEnvPath();
@@ -305,6 +309,56 @@ function getIconPath(): string {
 let mainWindow: BrowserWindow | null = null;
 let activeInstall: { cancelled: boolean } | null = null;
 
+// Pulls the desktop app back to the foreground after a browser-based
+// flow (OAuth sign-in/connect, MindsHub login, the Drive Picker) hands
+// control back to us — the OS default browser is frontmost after the
+// redirect, and without this the user is left on the "you can close
+// this tab" page with no indication the app already picked up the
+// result.
+function focusMainWindow() {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      app.focus({ steal: true }); // macOS: steal focus from the browser
+    }
+  } catch {}
+}
+
+// One-shot self-heal for the boot OTA load: if the activated bundle's main
+// frame fails to load (missing/corrupt assets), roll it back and fall to the
+// app-bundled renderer. Uses `.on()` (not `.once()`) so benign subframe /
+// ERR_ABORTED events don't consume the listener before a real main-frame
+// result; disarms on the first relevant main-frame outcome or a timeout.
+function armOtaBootSelfHeal(win: BrowserWindow) {
+  let done = false;
+  const disarm = () => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    win.webContents.removeListener('did-finish-load', onOk);
+    win.webContents.removeListener('did-fail-load', onFail);
+  };
+  const recover = (why: string) => {
+    disarm();
+    console.error(`[main] OTA renderer ${why} at boot — rolling back to bundled`);
+    rollbackUI();
+    if (!win.isDestroyed()) win.loadFile(getBundledPath());
+  };
+  const onOk = () => disarm();
+  const onFail = (_e: unknown, code: number, _desc: string, _url: string, isMainFrame: boolean) => {
+    if (!isMainFrame || code === -3) return; // subframe / benign abort — stay armed
+    recover('failed to load');
+  };
+  // A bundle that hangs during parse fires neither event; treat the timeout as a
+  // failure and roll back (same 15s the post-swap health check uses), rather
+  // than leaving the user stuck on a hung renderer.
+  const timer = setTimeout(() => { if (!done) recover('did not load within timeout'); }, 15000);
+  win.webContents.on('did-finish-load', onOk);
+  win.webContents.on('did-fail-load', onFail);
+}
+
 function createWindow() {
   const icon = nativeImage.createFromPath(getIconPath());
   const isDev = !app.isPackaged && process.env.VITE_DEV === '1';
@@ -385,6 +439,10 @@ function createWindow() {
   } else {
     const rendererPath = getRendererPath();
     console.log(`[main] loading renderer from ${rendererPath}`);
+    // Boot self-heal: arm BEFORE the load (so the result can't be missed) when
+    // serving an activated OTA bundle. A bad hot-update rolls back to the
+    // app-bundled renderer instead of re-loading the broken bundle every launch.
+    if (isServingOta()) armOtaBootSelfHeal(mainWindow);
     mainWindow.loadFile(rendererPath);
   }
 
@@ -589,6 +647,10 @@ function setupIPC() {
         return { ok: false, reason: `Could not load connector spec for "${engine}".` };
       }
 
+      // supports_refresh defaults true (matches the server-side schema
+      // default) when a spec doesn't declare it explicitly.
+      const supportsRefresh = oauthBlock.supports_refresh !== false;
+
       const pkceResult = await oauthConnect({
         authUrl: oauthBlock.auth_url,
         tokenUrl: oauthBlock.token_url,
@@ -596,32 +658,29 @@ function setupIPC() {
         clientSecret,
         scopes: oauthBlock.scopes,
         extraAuthParams: oauthBlock.extra_auth_params,
+        redirectPort: oauthBlock.redirect_port,
       });
-      if (!pkceResult.ok || !pkceResult.access_token || !pkceResult.refresh_token) {
+      if (!pkceResult.ok || !pkceResult.access_token || (supportsRefresh && !pkceResult.refresh_token)) {
         return { ok: false, reason: pkceResult.reason || 'OAuth flow did not return tokens.' };
       }
+      focusMainWindow();
 
-      // Fetch account email from Google userinfo — needed as keychain key
-      // and for the vault record's display name. The token exchange already
-      // succeeded at this point, so retry once on a transient failure rather
-      // than forcing the user to redo the whole consent flow.
+      // Fetch account email — needed as keychain key and for the vault
+      // record's display name. The token exchange already succeeded at
+      // this point, so retry once on a transient failure rather than
+      // forcing the user to redo the whole consent flow.
       let accountEmail = '';
       for (let attempt = 0; attempt < 2 && !accountEmail; attempt++) {
         if (attempt > 0) await new Promise((r) => setTimeout(r, 500));
-        try {
-          const uiRes = await fetch('https://www.googleapis.com/oauth2/v1/userinfo', {
-            headers: { Authorization: `Bearer ${pkceResult.access_token}` },
-          });
-          if (uiRes.ok) {
-            const ui = await uiRes.json() as { email?: string };
-            accountEmail = ui.email || '';
-          }
-        } catch {}
+        accountEmail = await fetchAccountEmail(engine, pkceResult.access_token);
       }
-      if (!accountEmail) return { ok: false, reason: 'Could not retrieve account email from Google.' };
+      if (!accountEmail) return { ok: false, reason: 'Could not retrieve account email.' };
 
       // Store refresh_token in OS keychain — never sent over the network.
-      await setRefreshToken(engine, accountEmail, pkceResult.refresh_token);
+      // Absent entirely for a supports_refresh: false connector.
+      if (pkceResult.refresh_token) {
+        await setRefreshToken(engine, accountEmail, pkceResult.refresh_token);
+      }
 
       const expiresAt = new Date(Date.now() + (pkceResult.expires_in ?? 3600) * 1000).toISOString();
       const tokenUrl: string = oauthBlock.token_url;
@@ -648,9 +707,10 @@ function setupIPC() {
         },
       );
       if (!saveRes.ok) {
-        // Roll back the keychain write from above — otherwise a live Google
-        // refresh token is orphaned in the OS keychain with no vault record
-        // ever pointing at it.
+        // Roll back the keychain write from above (a no-op if this
+        // connector has none, e.g. supports_refresh: false) — otherwise a
+        // live refresh token is orphaned in the OS keychain with no vault
+        // record ever pointing at it.
         try { await deleteRefreshToken(engine, accountEmail); } catch {}
         return { ok: false, reason: `Failed to save connection (${saveRes.status}).` };
       }
@@ -662,7 +722,64 @@ function setupIPC() {
     }
 
     // BYOK passthrough: renderer passes full OAuth opts, gets tokens back.
-    return oauthConnect(o);
+    const byokResult = await oauthConnect(o);
+    if (byokResult.ok) focusMainWindow();
+    return byokResult;
+  });
+
+  ipcMain.handle(IPC.OAUTH_PICK_DRIVE_FILES, async (_event, opts) => {
+    const { engine, name, accountEmail, fileIds, projectName } = opts || {};
+    if (!engine || !name || !accountEmail) return { ok: false, reason: 'engine, name, and accountEmail are required.' };
+    if (!isValidDriveFileIds(fileIds)) return { ok: false, reason: 'Invalid file id.' };
+    const access = await getPickerAccess(engine, accountEmail);
+    if (!access.ok) return access;
+    const pickResult = await openDrivePickerFlow(access.accessToken, access.apiKey, access.appId, fileIds);
+    if (!pickResult.ok) return pickResult;
+    focusMainWindow();
+    const newFiles = pickResult.files || [];
+    // Nothing new picked (user cancelled) — return the existing persisted
+    // list untouched rather than wiping it.
+    if (newFiles.length === 0) {
+      return { ok: true, files: await getPickedFiles(engine, name), newFiles: [] };
+    }
+    // The picker's PICKED callback firing doesn't guarantee Google actually
+    // completed the per-file grant — confirm each file is readable with the
+    // token we just minted before persisting it, so a broken grant surfaces
+    // immediately instead of silently sitting in the list until Anton hits
+    // a 403 on it later.
+    const { verified, failed } = await verifyPickedFiles(access.accessToken, newFiles);
+    // Tag each newly-verified file with the project it was picked for
+    // (e.g. from the composer or a project's Project files rail) so the
+    // Project files display can scope to just that project — untagged
+    // (no projectName passed) when picked from connection-details, which
+    // has no project context. merge_picked_files unions this with
+    // whatever projects an already-picked file was tagged with before.
+    const tagged = projectName
+      ? verified.map((f) => ({ ...f, projects: [projectName] }))
+      : verified;
+    let files: PickedFile[];
+    if (tagged.length > 0) {
+      const saveResult = await savePickedFiles(engine, name, tagged);
+      // Persistence failing here must surface as a real failure — the
+      // renderer would otherwise show these files as granted/attached
+      // when the server never actually recorded the grant, so a reload
+      // later silently loses them.
+      if (!saveResult.ok) return { ok: false, reason: saveResult.reason, failed };
+      files = saveResult.files;
+    } else {
+      files = await getPickedFiles(engine, name);
+    }
+    // `files` is the connection's full accumulated grant (every file ever
+    // picked) — correct for CustomizeView's "everything this app can
+    // access" list, but callers that want "what did the user just pick in
+    // THIS session" (e.g. attaching to the current message) need `tagged`
+    // on its own, not the merged history.
+    return { ok: true, files, newFiles: tagged, failed };
+  });
+
+  ipcMain.handle(IPC.OAUTH_CANCEL_PICKER, () => {
+    cancelCurrentDrivePicker();
+    return true;
   });
 
   ipcMain.handle(IPC.KEYCHAIN_REVOKE, async (_event, opts) => {
@@ -671,6 +788,35 @@ function setupIPC() {
     const key = `${engine}:${accountEmail}`;
     revokedConnections.add(key);
     stopRefreshLoop(engine, accountEmail);
+    // The refresh_token is the only thing that actually revokes the whole
+    // grant with the provider — revoking an access_token (what
+    // cowork-server's own revoke() does, since the vault never holds
+    // refresh_token) only invalidates that one short-lived token, leaving
+    // the underlying authorization standing indefinitely. Electron is the
+    // only place that ever holds the real refresh_token, so this has to
+    // happen here, before it's deleted from the keychain. Gated on
+    // supports_revoke — false means silently skip, local cleanup only.
+    try {
+      const refreshToken = await getOAuthRefreshToken(engine, accountEmail);
+      if (refreshToken) {
+        const specRes = await fetch(
+          `http://127.0.0.1:${getServerPort()}/api/v1/connectors/specs/${engine}`,
+          { headers: authHeader() },
+        );
+        if (specRes.ok) {
+          const spec = await specRes.json() as Record<string, any>;
+          const builtinMethod = spec?.form?.methods?.find((m: any) => m.id === 'browser_oauth_builtin');
+          const oauthBlock = builtinMethod?.oauth;
+          if (oauthBlock?.supports_revoke !== false && oauthBlock?.revoke_url) {
+            await fetch(oauthBlock.revoke_url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams({ token: refreshToken }).toString(),
+            });
+          }
+        }
+      }
+    } catch {}
     try { await deleteRefreshToken(engine, accountEmail); } catch {}
     try {
       await fetch(
@@ -700,20 +846,14 @@ function setupIPC() {
       scopes: ['openid', 'profile', 'email', 'organization', 'offline_access'],
     });
     if (result.ok && result.access_token) {
+      if (!result.refresh_token) {
+        // Session won't survive a restart without it — loud so a failing
+        // machine's log explains the next-launch sign-out (ENG-761).
+        console.warn('[mindshub:login] Keycloak returned no refresh_token — session will not persist across restarts');
+      }
       saveTokens(result.access_token, result.expires_in ?? 3600, result.refresh_token ?? '');
       scheduleRefresh(result.expires_in ?? 3600);
-      // Pull the desktop app back to the foreground. The SSO flow opens the
-      // OS default browser, which is frontmost after the redirect — without
-      // this the user is left on the "you can close this tab" page and may
-      // not realize the app has signed them in.
-      try {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          if (mainWindow.isMinimized()) mainWindow.restore();
-          mainWindow.show();
-          mainWindow.focus();
-          app.focus({ steal: true }); // macOS: steal focus from the browser
-        }
-      } catch {}
+      focusMainWindow();
     }
     return result;
   });
@@ -722,9 +862,16 @@ function setupIPC() {
   // touching the env file. Used after Stripe checkout so the renderer
   // can re-decode roles and confirm the user is now paid.
   ipcMain.handle(IPC.MINDSHUB_REFRESH, async () => {
-    const token = await refreshTokensOnly();
-    if (!token) return { ok: false, reason: 'No refresh token or refresh failed.' };
-    return { ok: true, access_token: token };
+    const result = await refreshTokensOnly();
+    if (result.status === 'ok') return { ok: true, access_token: result.token };
+    // Superseded means a newer login/logout won the race while this
+    // refresh was in flight — the store, not this exchange, holds the
+    // truth. Report the current session instead of a false failure.
+    if (result.status === 'superseded') {
+      const current = getAccessToken();
+      if (current) return { ok: true, access_token: current };
+    }
+    return { ok: false, reason: `Token refresh failed (${result.status}).` };
   });
 
   // Commit MindsHub as the LLM provider. The Keycloak JWT alone is
@@ -765,7 +912,19 @@ function setupIPC() {
     return { access_token: getAccessToken() };
   });
 
-  ipcMain.handle(IPC.AUTH_GET_ACCESS_TOKEN, () => getAccessToken());
+  // Authoritative "am I signed in?" read. The in-memory token is
+  // process-lifetime only, so right after a launch (or after a missed
+  // refresh window — laptop slept past the timer) it can be empty while
+  // a perfectly valid refresh token sits on disk. Refresh on miss so the
+  // Settings account card reflects the real session instead of showing
+  // an authenticated user as signed out (ENG-761).
+  ipcMain.handle(IPC.AUTH_GET_ACCESS_TOKEN, async () => {
+    const cached = getAccessToken();
+    if (cached && !isAccessTokenExpired()) return cached;
+    if (!getRefreshToken()) return cached;
+    const result = await refreshTokensOnly();
+    return result.status === 'ok' ? result.token : getAccessToken();
+  });
   ipcMain.handle(IPC.AUTH_LOGOUT, async () => {
     // Full sign-out: clear every credential + LLM-config key so the
     // next launch's checkConfigured() returns false and the user is
@@ -782,6 +941,12 @@ function setupIPC() {
     // waiting on this IPC. The end-session call has its own 3s
     // timeout regardless, so worst case it tidies up in background.
     endKeycloakSession();
+    cancelScheduledRefresh();
+    // Tear down any sign-in still waiting on its browser tab. Without
+    // this, the loopback server stays armed for up to 3 minutes and
+    // completing that stale tab silently signs the user back in after
+    // an explicit logout.
+    cancelCurrentOAuth();
     clearTokens();
 
     // Clear credentials from the server's SQLite DB (the authoritative
@@ -1064,10 +1229,15 @@ function setupIPC() {
   });
 
   ipcMain.handle(IPC.APP_UI_VERSION, async () => {
+    // `ui` is the OTA-activated bundle version, or null when running the
+    // renderer bundled with the installer. The renderer resolves the effective
+    // UI version (falling back to its own baked __APP_VERSION__) and shows the
+    // source tag; here we just report the raw facts.
     const uiVersion = getCachedVersion();
     return {
       app: getAppDisplayVersion(),
-      ui: uiVersion || 'bundled',
+      ui: uiVersion,
+      source: uiVersion ? 'ota' : 'bundled',
     };
   });
 
@@ -1108,6 +1278,15 @@ app.whenReady().then(async () => {
   // anything reads the env or starts the server. Best-effort + idempotent.
   migrateLegacyHome();
 
+  // A machine that slept past the refresh timer wakes with an expired
+  // in-memory token and a timer that fired into the void. Refresh on
+  // resume so the session is live again before the user looks at it
+  // (ENG-761 — the Windows-sleep flavour of "signed in but shows
+  // signed out"). powerMonitor is only usable after app ready.
+  powerMonitor.on('resume', () => {
+    if (getRefreshToken() && isAccessTokenExpired()) void refreshTokensOnly();
+  });
+
   // Purge any plaintext API keys older builds cached to disk (ENG-462).
   // Fire-and-forget: version-gated + idempotent, and current responses send
   // no-store so nothing new re-caches while this runs.
@@ -1140,16 +1319,34 @@ app.whenReady().then(async () => {
           submenu: [
             {
               label: 'About MindsHub Cowork',
-              click: () => {
-                const uiVersion = getCachedVersion();
-                const versionStr = uiVersion
-                  ? `${getAppDisplayVersion()} (UI: ${uiVersion})`
-                  : getAppDisplayVersion();
+              click: async () => {
+                // Unified headline = ISO week of the newest hot-updated
+                // component (UI + server + agent); the App shell is shown
+                // separately since it updates via a different channel.
+                // Per-component versions go in credits as a lightweight
+                // diagnostics readout. Mirrors the Settings → Updates panel
+                // (ENG-213).
+                const shell = getAppDisplayVersion();
+                const uiOta = getCachedVersion(); // OTA bundle version, or null when bundled
+                const uiEffective = uiOta || shell;
+                const { server, anton } = await fetchServerVersions().catch(() => ({ server: null, anton: null }));
+                const unified = unifiedVersion([uiEffective, server, anton]);
+
+                const lines = [
+                  `App shell ${shell}`,
+                  `UI ${uiOta ? `${uiOta} (OTA)` : `${shell} (bundled)`}`,
+                ];
+                if (server) lines.push(`Server ${server}`);
+                if (anton) lines.push(`Agent ${anton}`);
+                if (unified && unified.skewDays >= SKEW_WARN_DAYS) {
+                  lines.push(`⚠ components out of sync (${unified.skewDays} days apart)`);
+                }
+
                 app.setAboutPanelOptions({
                   applicationName: 'MindsHub Cowork',
-                  applicationVersion: versionStr,
+                  applicationVersion: unified ? unified.label : shell,
                   copyright: 'By MindsDB',
-                  credits: 'Autonomous AI Coworker\nhttps://mindsdb.com',
+                  credits: `Autonomous AI Coworker\nhttps://mindsdb.com\n\n${lines.join('\n')}`,
                 });
                 app.showAboutPanel();
               },
@@ -1183,7 +1380,7 @@ app.whenReady().then(async () => {
       role: 'help',
       submenu: [
         {
-          label: 'Anton Cowork Documentation',
+          label: 'MindsHub Cowork Documentation',
           click: () => {
             shell.openExternal('https://docs.mindshub.ai/index.html');
           },
@@ -1250,19 +1447,32 @@ app.whenReady().then(async () => {
     }
     // If MindsHub SSO tokens are stored, silently refresh before the Python
     // server starts — it reads .env at boot and needs a valid JWT.
+    //
+    // ENG-761: destroy local auth state ONLY on a definitive
+    // `invalid_grant` from Keycloak. The old code cleared tokens (and
+    // stripped env credentials) on ANY falsy refresh — so a network
+    // blip at launch (Windows boots the app before the network is up)
+    // permanently signed the user out. A transient failure now keeps
+    // everything; minds-auth retries on its own timer and the next
+    // successful refresh broadcasts the signed-in state to the UI.
     const existingRefresh = getRefreshToken();
     if (existingRefresh) {
-      const ok = await silentRefresh();
-      if (!ok) {
-        // Refresh token expired — clear so checkConfigured() returns false
-        // and the renderer routes back to onboarding.
-        clearTokens();
+      const outcome = await refreshTokensOnly();
+      if (outcome.status === 'invalid_grant') {
+        // Session is dead for real (tokens already cleared by
+        // refreshTokensOnly) — strip stale credentials so
+        // checkConfigured() returns false and the renderer routes
+        // back to onboarding.
         const envPath = getAntonEnvPath();
         if (fs.existsSync(envPath)) {
           const lines = fs.readFileSync(envPath, 'utf-8').split('\n')
             .filter(l => !l.startsWith('ANTON_OPENAI_API_KEY=') && !l.startsWith('ANTON_MINDS_API_KEY='));
           fs.writeFileSync(envPath, lines.join('\n'), 'utf-8');
         }
+      } else if (outcome.status === 'transient') {
+        console.warn('[auth] boot token refresh failed transiently — keeping session, retry scheduled');
+      } else if (outcome.status !== 'ok') {
+        console.warn(`[auth] boot token refresh skipped (${outcome.status}) — keeping session`);
       }
     }
 
@@ -1305,6 +1515,9 @@ app.whenReady().then(async () => {
     } else {
       console.error(`[server] start failed: ${result.reason}`);
     }
+    // A constrained OTA cache that booted bundled (fail-closed) is re-verified
+    // and, if compatible, swapped in by the updater's boot check after the
+    // server-update pass — see settleConstrainedCache in updater.ts.
 
     // Wire the update checker regardless of whether the server booted. A
     // server that can't start is the case that MOST needs an update — a newer
@@ -1366,7 +1579,9 @@ async function startOrphanRefreshLoops(): Promise<void> {
         const specRes = await fetch(`http://127.0.0.1:${getServerPort()}/api/v1/connectors/specs/${engine}`, { headers: authHeader() });
         if (!specRes.ok) continue;
         const spec = await specRes.json() as Record<string, any>;
-        const tokenUrl = spec?.form?.methods?.find((m: any) => m.id === 'browser_oauth_builtin')?.oauth?.token_url;
+        const oauthBlock = spec?.form?.methods?.find((m: any) => m.id === 'browser_oauth_builtin')?.oauth;
+        if (oauthBlock?.supports_refresh === false) continue;
+        const tokenUrl = oauthBlock?.token_url;
         if (!tokenUrl) continue;
         const refreshToken = await getOAuthRefreshToken(engine, accountEmail);
         if (!refreshToken) continue;
