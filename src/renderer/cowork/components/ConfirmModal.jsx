@@ -6,6 +6,7 @@
 // click both dismiss without confirming.
 
 import { useEffect } from 'react';
+import { Button } from './ui';
 
 export function ConfirmModal({
   open,
@@ -56,7 +57,7 @@ export function ConfirmModal({
           background: 'var(--surface)',
           border: '1px solid var(--line)',
           borderRadius: 12,
-          boxShadow: '0 24px 60px rgba(15,16,17,0.25), 0 1px 0 rgba(15,16,17,0.04)',
+          boxShadow: 'var(--sh-modal)',
           padding: '20px 22px 16px',
           fontFamily: "'Inter', sans-serif",
         }}
@@ -81,38 +82,20 @@ export function ConfirmModal({
           marginTop: 18,
           display: 'flex', justifyContent: 'flex-end', gap: 8,
         }}>
-          <button
-            type="button"
+          <Button
+            variant="subtle"
             onClick={onClose}
             disabled={busy}
-            style={{
-              all: 'unset', cursor: busy ? 'default' : 'pointer',
-              padding: '8px 14px', borderRadius: 8,
-              border: '1px solid var(--line)',
-              fontSize: 13, fontWeight: 500, color: 'var(--ink-2)',
-              background: 'transparent',
-              opacity: busy ? 0.45 : 1,
-            }}
-            onMouseOver={(e) => { if (busy) return; e.currentTarget.style.background = 'var(--surface-2)'; e.currentTarget.style.color = 'var(--ink)'; }}
-            onMouseOut={(e) => { if (busy) return; e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--ink-2)'; }}
           >
             {cancelLabel}
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            // The deliberate "yes, do it" moment: destructive confirms use the
+            // escalated solid-red variant; everything else, the accent CTA.
+            variant={destructive ? 'danger-solid' : 'primary'}
             onClick={() => { if (!busy) onConfirm?.(); }}
             disabled={busy}
             autoFocus
-            style={{
-              all: 'unset', cursor: busy ? 'progress' : 'pointer',
-              padding: '8px 14px', borderRadius: 8,
-              fontSize: 13, fontWeight: 600,
-              color: '#fff',
-              background: destructive ? 'var(--danger)' : 'var(--accent)',
-              border: `1px solid ${destructive ? 'var(--danger)' : 'var(--accent)'}`,
-              opacity: busy ? 0.8 : 1,
-              display: 'inline-flex', alignItems: 'center', gap: 7,
-            }}
           >
             {busy && (
               <span
@@ -127,7 +110,7 @@ export function ConfirmModal({
               />
             )}
             {busy ? (busyLabel || confirmLabel) : confirmLabel}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

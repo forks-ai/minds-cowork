@@ -197,7 +197,7 @@ export default function NewProjectModal({ open, onClose, onCreated }) {
           background: 'var(--surface)',
           border: '1px solid var(--line)',
           borderRadius: 14,
-          boxShadow: '0 24px 60px rgba(15,16,17,0.30)',
+          boxShadow: 'var(--sh-modal)',
           display: 'flex', flexDirection: 'column', overflow: 'hidden',
           fontFamily: FONT_BODY,
         }}
@@ -364,29 +364,18 @@ export default function NewProjectModal({ open, onClose, onCreated }) {
           borderTop: '1px solid var(--line)',
           background: 'var(--surface)',
         }}>
-          <button
-            type="button"
+          <Button
+            variant="subtle"
             onClick={() => !busy && onClose?.()}
             disabled={busy}
-            // Cancel reads as a quiet text button — no border, no fill,
-            // distinct from the primary CREATE which is the
-            // existing global `.btn-primary` style.
-            style={{
-              cursor: busy ? 'not-allowed' : 'pointer',
-              background: 'transparent', border: 0,
-              color: 'var(--ink-3)',
-              padding: '7px 14px', borderRadius: 7,
-              fontFamily: FONT_BODY, fontSize: 13, fontWeight: 500,
-              opacity: busy ? 0.5 : 1,
-            }}
-          >Cancel</button>
+          >Cancel</Button>
           <Button
             variant="primary"
             onClick={create}
             disabled={busy || !name.trim()}
-            style={{ letterSpacing: '0.04em' }}
           >
-            {busy ? 'Creating…' : 'CREATE'}
+            {!busy && Ico.plus(14)}
+            {busy ? 'Creating…' : 'Create'}
           </Button>
         </div>
       </div>

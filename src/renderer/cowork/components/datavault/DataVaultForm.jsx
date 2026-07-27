@@ -31,7 +31,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Ico from '../Icons';
-import { Checkbox } from '../ui';
+import { Badge, Button, Checkbox, Select } from '../ui';
 import {
   setFormState,
   setSelectedMethod,
@@ -106,17 +106,17 @@ function FieldInput({ field, value, onChange, disabled }) {
 
   if (field.type === 'select') {
     return (
-      <select
+      <Select
         value={displayValue}
         disabled={disabled}
-        onChange={(e) => onChange(e.target.value)}
-        style={baseStyle}
-      >
-        {!field.required && <option value="">—</option>}
-        {(field.options || []).map((opt) => (
-          <option key={opt.value} value={opt.value}>{opt.label || opt.value}</option>
-        ))}
-      </select>
+        onValueChange={onChange}
+        ariaLabel={field.label}
+        style={{ background: 'var(--surface-2)', borderRadius: 7 }}
+        options={[
+          ...(!field.required ? [{ value: '', label: '—' }] : []),
+          ...(field.options || []).map((opt) => ({ value: opt.value, label: opt.label || opt.value })),
+        ]}
+      />
     );
   }
   if (field.type === 'textarea') {
@@ -361,20 +361,11 @@ export function DataVaultForm({ spec, busy = false, onAction, onMethodChange, co
                 { id: 'view_connectors', label: 'View connectors →', kind: 'primary' },
               ]
           ).map((a) => (
-            <button
+            <Button
               key={a.id}
-              type="button"
+              variant={a.kind === 'primary' ? 'primary' : 'subtle'}
               onClick={() => onAction?.({ id: a.id, kind: a.kind || 'cancel' })}
-              className={a.kind === 'primary' ? 'btn-primary' : undefined}
-              style={a.kind === 'primary' ? undefined : {
-                background: 'transparent',
-                border: '1px solid var(--line)',
-                color: 'var(--ink-2)',
-                padding: '7px 12px', borderRadius: 7,
-                fontFamily: FONT_BODY, fontSize: 12.5, fontWeight: 500,
-                cursor: 'pointer',
-              }}
-            >{a.label}</button>
+            >{a.label}</Button>
           ))}
         </div>
       </div>
@@ -594,7 +585,7 @@ export function DataVaultForm({ spec, busy = false, onAction, onMethodChange, co
                       borderRadius: '50%',
                       border: '1.5px solid color-mix(in srgb, var(--accent) 30%, transparent)',
                       borderTopColor: 'var(--accent)',
-                      animation: 'dvf-spin 720ms linear infinite',
+                      animation: 'spin 720ms linear infinite',
                     }}
                   />
                   {f.status}
@@ -674,9 +665,13 @@ export function DataVaultForm({ spec, busy = false, onAction, onMethodChange, co
             ? 'Save changes'
             : a.label;
           return (
-            <button
+            <Button
               key={a.id}
-              type="button"
+              variant={
+                a.kind === 'primary' ? 'primary'
+                  : a.kind === 'cancel' ? 'subtle'
+                  : 'default'
+              }
               onClick={() => {
                 // Field-level skip via an action button (vs the per-field
                 // skip control). Useful when the spec wants a one-shot
@@ -688,28 +683,14 @@ export function DataVaultForm({ spec, busy = false, onAction, onMethodChange, co
                 dispatch(a);
               }}
               disabled={busy && a.kind !== 'cancel'}
-              // `is-busy` paints a gentle accent pulse while the
-              // probe is in flight (see globals.css `.btn-primary.is-busy`).
-              // Overrides the default disabled-dim so the button
-              // reads as "working" rather than "dead."
-              className={
-                a.kind === 'primary'
-                  ? `btn-primary${busy ? ' is-busy' : ''}`
-                  : undefined
-              }
-              style={a.kind === 'primary' ? undefined : {
-                background: 'transparent',
-                border: '1px solid var(--line)',
-                color: a.kind === 'cancel' ? 'var(--ink-3)' : 'var(--ink-2)',
-                padding: '7px 12px',
-                borderRadius: 7,
-                fontFamily: FONT_BODY, fontSize: 12.5, fontWeight: 500,
-                cursor: busy ? 'progress' : 'pointer',
-                opacity: busy ? 0.6 : 1,
-              }}
+              // `is-busy` paints a gentle accent pulse while the probe is
+              // in flight (globals.css `.btn.primary.is-busy`). Overrides
+              // the default disabled-dim so the button reads as "working"
+              // rather than "dead."
+              className={a.kind === 'primary' && busy ? 'is-busy' : undefined}
             >
               {a.kind === 'primary' && busy ? 'Working…' : label}
-            </button>
+            </Button>
           );
         })}
         </div>
@@ -847,14 +828,11 @@ function MethodPicker({ methods, onPick, busy }) {
                 overflowWrap: 'anywhere', wordBreak: 'break-word',
               }}>{m.label || m.id}</span>
               {m.recommended && (
-                <span style={{
-                  fontSize: 10.5, fontFamily: FONT_MONO, letterSpacing: '0.04em',
-                  color: 'var(--accent)',
-                  padding: '2px 7px', borderRadius: 999,
-                  background: 'color-mix(in srgb, var(--accent) 12%, transparent)',
-                  border: '1px solid color-mix(in srgb, var(--accent) 30%, transparent)',
-                  textTransform: 'uppercase',
-                }}>Recommended</span>
+                <Badge
+                  variant="accent"
+                  size="sm"
+                  className="font-mono uppercase tracking-[0.04em]"
+                >Recommended</Badge>
               )}
             </div>
             {m.description && (

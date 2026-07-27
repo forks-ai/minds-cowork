@@ -13,6 +13,8 @@
 // operations (openPath) return { ok: false, reason: 'unsupported' }
 // so call sites can branch / hide affordances.
 
+import type { ServerStartErrorKind } from '../../shared/server-status';
+
 const ANTON_SERVER_PORT = 26866;
 
 type Bridge = typeof window extends { antontron?: infer T } ? T : never;
@@ -137,9 +139,15 @@ export interface ServerDiagnostics {
   starting: boolean;
   port: number | null;
   lastError: string | null;
+  /** Discriminant for the failure the panel explains; null when healthy. */
+  lastErrorKind: ServerStartErrorKind | null;
+  /** PID holding the port after a failed start, when one was found. */
+  portHolderPid: number | null;
   lastExitCode: number | null;
   lastStartAt: number | null;
   recentLog: string;
+  /** True when the backend went down because the user asked it to. */
+  lastStopIntentional: boolean | null;
 }
 
 export async function serverDiagnostics(): Promise<ServerDiagnostics> {
@@ -151,9 +159,12 @@ export async function serverDiagnostics(): Promise<ServerDiagnostics> {
     starting: false,
     port: window.location.port ? Number(window.location.port) : null,
     lastError: null,
+    lastErrorKind: null,
+    portHolderPid: null,
     lastExitCode: null,
     lastStartAt: null,
     recentLog: '',
+    lastStopIntentional: null,
   };
 }
 
@@ -246,9 +257,17 @@ export async function getVersionInfo(): Promise<VersionInfo> {
 // React pages are shell-agnostic once they go through `host.*`.
 
 async function fetchJson(path: string, init?: RequestInit): Promise<any> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(init?.headers as Record<string, string> || {}) };
+  // Web: attach the Keycloak token as a Bearer header so the ingress auth
+  // subrequest validates the caller (mirrors cowork/api.js authFetch). Electron
+  // injects the loopback token in main, so nothing is added there.
+  if (isWeb) {
+    const token = await getAccessToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+  }
   const res = await fetch(`${getApiOrigin()}${path}`, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+    headers,
   });
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
@@ -559,6 +578,16 @@ export async function mindshubLogin(): Promise<MindsHubLoginResult> {
   return { ok: false, reason: 'MindsHub login bridge is Electron-only.' };
 }
 
+// Sign-up through Keycloak's registration form, same loopback PKCE flow
+// as mindshubLogin (ENG-917). The promise stays pending through the
+// email-verification pause — resolve may arrive many minutes after call.
+export async function mindshubSignup(): Promise<MindsHubLoginResult> {
+  if (isElectron && typeof bridge.mindshubSignup === 'function') {
+    return bridge.mindshubSignup();
+  }
+  return { ok: false, reason: 'MindsHub sign-up bridge is Electron-only.' };
+}
+
 export async function mindshubRefresh(): Promise<{ ok: boolean; reason?: string; access_token?: string }> {
   if (isElectron && typeof bridge.mindshubRefresh === 'function') {
     return bridge.mindshubRefresh();
@@ -666,6 +695,7 @@ export const host = {
   oauthConnect,
   oauthCancel,
   mindshubLogin,
+  mindshubSignup,
   mindshubRefresh,
   mindshubFinalize,
   mindshubGetCachedToken,

@@ -34,6 +34,12 @@ export const SETTINGS_KEY_MAP = {
   coding_provider: 'codingProvider',
   coding_model: 'codingModel',
   coding_reasoning_effort: 'codingReasoningEffort',
+  // Router (anton's "thalamus" role) — the cheap front-model that gates each
+  // turn respond-vs-delegate AND runs history summarization. Selectable so
+  // users can point routing+summarization at a cheap model (defaults per
+  // provider: MindsHub→kimi, else smallest).
+  router_provider: 'routerProvider',
+  router_model: 'routerModel',
   openai_base_url: 'openaiBaseUrl',
   model_mode: 'modelMode',
   model_overrides: 'modelOverrides',
@@ -54,7 +60,6 @@ export const SETTINGS_KEY_MAP = {
   episodic_memory: 'episodicMemory',
   proactive_dashboards: 'proactiveDashboards',
   act_first: 'actFirst',
-  ui_update_mode: 'uiUpdateMode',
   publish_url: 'publishUrl',
   greeting: 'greeting',
   tone: 'tone',
@@ -79,7 +84,7 @@ const PROVIDER_TO_SERVER = {
   'minds-cloud': 'minds_cloud',
 };
 
-const PROVIDER_FIELDS = new Set(['planningProvider', 'codingProvider']);
+const PROVIDER_FIELDS = new Set(['planningProvider', 'codingProvider', 'routerProvider']);
 
 export function providerValueToType(value) {
   if (!value) return '';
@@ -109,12 +114,15 @@ export function providerTypeToServerValue(value) {
 export function effectiveRoleModel(settings, role) {
   const s = settings || {};
   if (role === 'planning') return s.planningModel ?? s.defaultModel ?? '';
+  if (role === 'router') return s.routerModel ?? '';
   return s.codingModel ?? '';
 }
 
 export function effectiveRoleProvider(settings, role) {
   const s = settings || {};
-  const raw = role === 'planning' ? s.planningProvider : s.codingProvider;
+  const raw = role === 'planning' ? s.planningProvider
+    : role === 'router' ? s.routerProvider
+    : s.codingProvider;
   return providerValueToType(raw) || 'minds-cloud';
 }
 
@@ -140,9 +148,12 @@ export const STATIC_SETTINGS = {
   recommendedModels: {
     'minds-cloud': [], anthropic: [], openai: [], gemini: [], 'openai-compatible': [],
   },
-  // Per-provider (planning, coding) default pair (filled at runtime).
+  // Per-provider default model tuple (filled at runtime by the backend
+  // overlay). Historically [planning, coding]; extended to
+  // [planning, coding, router]. A missing 3rd slot falls back to the coding
+  // default in the UI, so an un-upgraded backend still works.
   recommendedPair: {
-    'minds-cloud': ['', ''], anthropic: ['', ''], openai: ['', ''], gemini: ['', ''], 'openai-compatible': ['', ''],
+    'minds-cloud': ['', '', ''], anthropic: ['', '', ''], openai: ['', '', ''], gemini: ['', '', ''], 'openai-compatible': ['', '', ''],
   },
 };
 
@@ -184,12 +195,72 @@ export function modelLabel(id) {
 }
 
 /**
+ * The display name for a model id: MindsHub's policy-supplied label when we
+ * have one, else the id-derived form above. One rule, used by every picker, so
+ * the composer and the Settings dropdown can't disagree about a model's name.
+ *
+ * `modelLabels` only ever covers minds-cloud (direct providers don't publish
+ * labels), so the fallback is the normal case, not an error path.
+ */
+export function displayModelLabel(id, modelLabels = {}) {
+  return (modelLabels && modelLabels[id]) || modelLabel(id);
+}
+
+/**
  * Map a provider's runtime model-id list to `{id, label}` options for
  * dropdowns. `recommendedModels` is the backend-overlaid map from settings.
  */
-export function recommendedModelOptions(recommendedModels, providerType) {
+export function recommendedModelOptions(recommendedModels, providerType, modelLabels = {}) {
   const ids = (recommendedModels && recommendedModels[providerType]) || [];
-  return ids.map((id) => ({ id, label: modelLabel(id) }));
+  return ids.map((id) => ({ id, label: displayModelLabel(id, modelLabels) }));
+}
+
+/**
+ * Merge a `/settings/recommended-models` response into the settings we already
+ * hold, returning just the keys it owns. Used by both the mount-time load and
+ * the picker's on-open refresh so there is one rule for this, not two.
+ *
+ * Nothing empty from the server ever overwrites something we have:
+ *
+ *   - a per-provider list is replaced only when the live one is non-empty. An
+ *     unconfigured provider comes back `[]` (`RECOMMENDED_MODELS['minds-cloud']`
+ *     is an empty placeholder server-side), and so does a *failed* MindsHub
+ *     fetch — the endpoint still answers 200. Overwriting on that empties the
+ *     picker until the app restarts.
+ *   - the id-keyed maps are replaced only when the live one is non-empty, for
+ *     the same reason. An empty `modelEnabled` reads as "everything is
+ *     available" and would silently unlock paid models; cowork-server refuses
+ *     to persist an empty map for exactly this reason.
+ *
+ * The cost of that is a stale entry outliving a model's removal from the
+ * policy, which self-corrects on the next successful fetch. Losing the list
+ * does not self-correct, so this is the right way round.
+ *
+ * @param {object} prev current settings (or the freshly transformed rows)
+ * @param {object|null} rec the endpoint's response, or null when it failed
+ * @returns {object|null} the subset of settings keys to apply, null if nothing
+ *   is usable (caller leaves what it has alone)
+ */
+export function mergeRecommendedModels(prev, rec) {
+  if (!rec || typeof rec !== 'object') return null;
+  const base = prev || {};
+  const overlayLists = (current, live) => {
+    const merged = { ...current };
+    for (const [k, v] of Object.entries(live || {})) {
+      if (Array.isArray(v) && v.length) merged[k] = v;
+    }
+    return merged;
+  };
+  const overlayMap = (current, live) => (
+    live && typeof live === 'object' && Object.keys(live).length ? live : (current || {})
+  );
+  return {
+    recommendedModels: overlayLists(base.recommendedModels, rec.recommendedModels),
+    recommendedPair: overlayLists(base.recommendedPair, rec.recommendedPair),
+    modelEfforts: overlayMap(base.modelEfforts, rec.modelEfforts),
+    modelEnabled: overlayMap(base.modelEnabled, rec.modelEnabled),
+    modelLabels: overlayMap(base.modelLabels, rec.modelLabels),
+  };
 }
 
 // ─── Model picker select-value resolution ───────────────────────────
@@ -234,6 +305,54 @@ export function resolveModelPickerValue(curModel, modelList, allowOther, forceCu
     ? '__custom__'
     : (showStalePin ? '__stale__' : curModel);
   return { savedIsCustom, showStalePin, inputMode, selectValue };
+}
+
+/**
+ * Build the model `<Select>` option list for the Agent-Models picker, given
+ * `resolveModelPickerValue`'s `showStalePin` flag. Pairs with it: every
+ * value `resolveModelPickerValue` can return (`selectValue`) has a matching
+ * entry here, which is what keeps the ENG-739 invariant true end-to-end —
+ * a stored pin or a locked model is always a real, rendered (if disabled)
+ * option, never a value the control can silently desync on.
+ *
+ * @param {string} curModel     currently-stored model id
+ * @param {string[]} modelList  provider's recommended model ids
+ * @param {boolean} allowOther  whether to append the "Other…" custom-id entry
+ * @param {boolean} showStalePin from resolveModelPickerValue
+ * @param {Record<string, boolean>} modelEnabled per-model availability map
+ *   (settings.modelEnabled); a model mapped to `false` renders locked.
+ * @param {Record<string, string>} modelLabels per-model display label
+ *   (settings.modelLabels, MindsHub-supplied). Display-only — the id/alias
+ *   passed as `value` is still what's saved/resolved everywhere else. A
+ *   model missing here (every direct provider; a minds-cloud model with no
+ *   label) falls back to modelLabel()'s id-derived label.
+ */
+export function buildModelOptions(curModel, modelList, allowOther, showStalePin, modelEnabled = {}, modelLabels = {}) {
+  const list = Array.isArray(modelList) ? modelList : [];
+  const isLocked = (m) => modelEnabled[m] === false;
+  const labelFor = (m) => displayModelLabel(m, modelLabels);
+  return [
+    ...(showStalePin
+      // Labeled "legacy — re-select" (not "current") so it reads as an
+      // action to take, not a selection: the same model may also appear
+      // below as a real "— Add credits to unlock" row, and a bare "(current)"
+      // would look like two identical, already-selected entries (ENG-739
+      // review).
+      ? [{
+          value: '__stale__',
+          label: `${labelFor(curModel.replace(/^latest:/, ''))} (legacy — re-select a model)`,
+          disabled: true,
+        }]
+      : []),
+    // Wallet-based access (ENG-412, #434): a locked model is one the org's
+    // wallet can't currently pay for — prompt to add credits, not upgrade.
+    ...list.map((m) => ({
+      value: m,
+      label: `${labelFor(m)}${isLocked(m) ? ' — Add credits to unlock' : ''}`,
+      disabled: isLocked(m),
+    })),
+    ...(allowOther ? [{ value: '__custom__', label: 'Other…' }] : []),
+  ];
 }
 
 // ─── Row → client transform ─────────────────────────────────────────

@@ -11,26 +11,93 @@
 // Pure CalVer helpers from the shared version module (no I/O) — used by the
 // OTA cache-freshness / update-newer decisions below.
 import { parseCalVer, compareCalVer, newestCalVer } from '../shared/version';
+import type { ServerStartErrorKind } from '../shared/server-status';
 
 // ---------------------------------------------------------------------------
 // Version comparison
 // ---------------------------------------------------------------------------
 
-/** Compare simple X.Y.Z versions. <0 if a<b, 0 if equal, >0 if a>b.
- *  (No pre-release handling — server releases are plain semver triples.) */
+// A CalVer segment carrying a PEP 440 rc suffix, e.g. the "1rc2" in
+// 0.26.7.23.1rc2 (the staging pre-release track). Only this exact shape is
+// ordered specially; every other non-numeric segment keeps the historical
+// NaN comparison semantics (load-bearing for '.devN' git-install versions —
+// see parseInstalledVersion).
+const RC_SEGMENT = /^(\d+)rc(\d+)$/;
+
+/** Compare dotted versions. <0 if a<b, 0 if equal, >0 if a>b.
+ *  Plain numeric segments compare numerically; an `NrcM` segment sorts
+ *  before its own base release (X.1rc2 < X.1) and rc numbers order among
+ *  themselves, mirroring PEP 440 for the staging rc stream. */
 export function compareVersions(a: string, b: string): number {
-  const pa = a.split('.').map(Number);
-  const pb = b.split('.').map(Number);
+  const pa = a.split('.');
+  const pb = b.split('.');
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
+    const ra = pa[i] ?? '0';
+    const rb = pb[i] ?? '0';
+    const ma = RC_SEGMENT.exec(ra);
+    const mb = RC_SEGMENT.exec(rb);
+    if (ma || mb) {
+      const baseDiff = Number(ma ? ma[1] : ra) - Number(mb ? mb[1] : rb);
+      if (baseDiff !== 0) return baseDiff;
+      if (ma && mb) {
+        const rcDiff = Number(ma[2]) - Number(mb[2]);
+        if (rcDiff !== 0) return rcDiff;
+        continue;
+      }
+      // Equal base, one side is the release: the rc precedes it.
+      return ma ? -1 : 1;
+    }
+    const diff = Number(ra) - Number(rb);
     if (diff !== 0) return diff;
   }
   return 0;
 }
 
+// Versions eligible for "latest on PyPI" selection: plain dotted CalVer with
+// an optional trailing rc suffix. Anything else (dev builds, local versions,
+// epochs) is not something the desktop should auto-update onto.
+const SANE_PYPI_VERSION = /^\d+(\.\d+)*(rc\d+)?$/;
+
+/** Pick the newest installable version from a PyPI project JSON.
+ *  Stable path (prod builds): trust `info.version`, which PyPI computes
+ *  excluding pre-releases. Pre-release path (staging/preview builds): scan
+ *  the `releases` map for the PEP 440 maximum across stable AND rc versions,
+ *  skipping fully-yanked or empty releases and unparseable version strings. */
+export function selectLatestPypiVersion(input: {
+  infoVersion: string | null;
+  releases: Record<string, Array<{ yanked?: boolean }>> | null | undefined;
+  includePrereleases: boolean;
+}): string | null {
+  if (!input.includePrereleases) return input.infoVersion || null;
+  const candidates = Object.entries(input.releases ?? {})
+    .filter(([version, files]) =>
+      SANE_PYPI_VERSION.test(version) &&
+      Array.isArray(files) && files.length > 0 &&
+      files.some((f) => !f?.yanked))
+    .map(([version]) => version);
+  if (candidates.length === 0) return input.infoVersion || null;
+  return candidates.reduce((best, v) => (compareVersions(v, best) > 0 ? v : best));
+}
+
 /** Installer gate: does the installed version satisfy the minimum floor? */
 export function meetsMinVersion(installed: string, min: string): boolean {
   return compareVersions(installed, min) >= 0;
+}
+
+/** Extract the exact anton-agent pin from a wheel's Requires-Dist list.
+ *  Staging rc wheels pin `anton-agent==<rc>`; the desktop must re-state that
+ *  pin as a DIRECT requirement (`uv tool install ... --with anton-agent==X`)
+ *  because uv honors pre-release markers only in direct requirements — left
+ *  transitive, an rc pin makes the whole resolution fail. Returns null for
+ *  loose constraints (stable wheels), where no direct restatement is needed. */
+export function parseAntonPin(requiresDist: unknown): string | null {
+  if (!Array.isArray(requiresDist)) return null;
+  for (const entry of requiresDist) {
+    if (typeof entry !== 'string') continue;
+    const match = entry.match(/^anton-agent\s*==\s*([A-Za-z0-9.!+]+)/);
+    if (match) return match[1];
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -47,7 +114,12 @@ export function parseInstalledVersion(stdout: string): string | null {
   // eslint-disable-next-line no-control-regex
   const clean = stdout.replace(/\x1b\[[0-9;]*m/g, '');
   for (const line of clean.split('\n')) {
-    const match = line.match(/^cowork-server\s+v?([\d.]+)/);
+    // Dotted release with an optional rc suffix (the staging pre-release
+    // stream). A bare [\d.]+ here once truncated 'X.2rc1' to the phantom
+    // release 'X.2', which both froze rc→rc updates (the phantom compares
+    // above every same-base rc) and made rollback pin a version that does
+    // not exist on PyPI. Local/dev tails ('.dev40+g…') are dropped.
+    const match = line.match(/^cowork-server\s+v?(\d+(?:\.\d+)*(?:rc\d+)?)/);
     if (match) return match[1];
   }
   return null;
@@ -187,7 +259,12 @@ export interface UpdateApplyDecision {
  *
  *  UI never force-applies on a down server — a dead backend is a server
  *  problem, and forcing a UI swap + reload mid-recovery adds churn without
- *  fixing anything. */
+ *  fixing anything.
+ *
+ *  ENG-858: `mode` is no longer a user-facing setting — everyone gets `auto`
+ *  unless `UI_UPDATE_MODE=manual` is hand-set in `~/.anton/.env` (support /
+ *  QA escape hatch). The parameter and this decision logic are unchanged;
+ *  only the Settings UI control that used to feed it was removed. */
 export function decideUpdateApply(input: {
   serverUpdateAvailable: boolean;
   uiUpdateAvailable: boolean;
@@ -322,5 +399,98 @@ export function parseUiManifest(jsonText: string): UIManifest | null {
     return manifest;
   } catch {
     return null;
+  }
+}
+
+export interface InstallerStepPlan {
+  /** macOS needs the Xcode CLT step only for git-channel installs: uv shells
+   *  out to real git there, and Apple's /usr/bin/git shim demands the CLT.
+   *  Wheel installs never touch git, so a stock Mac installs clean. */
+  needsXcodeStep: boolean;
+  /** Whether the installer includes a git step at all. Only the git channel
+   *  needs git (uv shells out to fetch a git+https source); a pypi install is
+   *  wheels-only, so the git check is omitted entirely rather than shown as a
+   *  passing/warning row a user reads as a scary near-miss. */
+  showGitStep: boolean;
+  /** Whether a missing git aborts the install. Consulted only when the git
+   *  step is shown (git channel); uv cannot fetch git sources without it. */
+  gitRequired: boolean;
+}
+
+export function installerStepPlan(platform: string, channel: 'git' | 'pypi'): InstallerStepPlan {
+  const fromGit = channel === 'git';
+  return {
+    needsXcodeStep: platform === 'darwin' && fromGit,
+    showGitStep: fromGit,
+    gitRequired: fromGit,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Sidecar start: how long to keep waiting, and what to say when we stop
+// ---------------------------------------------------------------------------
+
+export type StartWaitStep =
+  | { action: 'ready' }
+  | { action: 'poll' }
+  | { action: 'fail'; kind: Exclude<ServerStartErrorKind, 'not-installed'> };
+
+/** One iteration of the start wait: is the sidecar up, should we keep waiting,
+ *  or is it over?
+ *
+ *  This replaces a flat "give up after N ms" timer, which was wrong in both
+ *  directions: a slow-but-healthy machine got killed mid-import, and a sidecar
+ *  that died in the first second still made the user wait out the whole timer
+ *  to be told nothing useful. Waiting on liveness instead means a slow start
+ *  succeeds and a dead one is reported the moment it dies.
+ *
+ *  Health is evaluated BEFORE liveness on purpose. Both spawn targets normally
+ *  wait on python and forward its exit code, so an exit really is the end — but
+ *  the two are reported through different channels and can land out of order,
+ *  and a launcher that hands off without waiting would look identical to a
+ *  crash. Asking "did it answer /health" first means a server that is provably
+ *  up is never called dead over a technicality about who its parent was. */
+export function decideStartWait(input: {
+  healthy: boolean;
+  spawnError: string | null;
+  exited: boolean;
+  elapsedMs: number;
+  capMs: number;
+}): StartWaitStep {
+  if (input.healthy) return { action: 'ready' };
+  if (input.spawnError) return { action: 'fail', kind: 'spawn-error' };
+  if (input.exited) return { action: 'fail', kind: 'exited' };
+  if (input.elapsedMs >= input.capMs) return { action: 'fail', kind: 'timeout' };
+  return { action: 'poll' };
+}
+
+/** Sub-10s durations keep a decimal — the whole point of the early-exit path is
+ *  that it reports in a couple of seconds, and "0s" would hide that. */
+function formatElapsed(ms: number): string {
+  const seconds = ms / 1000;
+  return seconds < 10 ? `${seconds.toFixed(1)}s` : `${Math.round(seconds)}s`;
+}
+
+/** The one-line failure the diagnostics panel shows.
+ *
+ *  Each kind gets its own sentence. They all used to collapse into "Server did
+ *  not respond on /health within 15000ms", which described the app's timer
+ *  rather than anything that happened to the backend, and read identically
+ *  whether the process had crashed instantly or was importing normally. */
+export function startFailureMessage(input: {
+  kind: Exclude<ServerStartErrorKind, 'not-installed'>;
+  exitCode: number | null;
+  spawnError: string | null;
+  elapsedMs: number;
+}): string {
+  switch (input.kind) {
+    case 'spawn-error':
+      return `The backend could not be launched: ${input.spawnError || 'unknown spawn error'}.`;
+    case 'exited': {
+      const code = typeof input.exitCode === 'number' ? `code ${input.exitCode}` : 'no exit code';
+      return `The backend exited while starting up (${code}) after ${formatElapsed(input.elapsedMs)}.`;
+    }
+    case 'timeout':
+      return `The backend was still starting after ${formatElapsed(input.elapsedMs)} and never answered /health.`;
   }
 }

@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   compareVersions,
+  installerStepPlan,
   meetsMinVersion,
+  parseAntonPin,
+  selectLatestPypiVersion,
   parseInstalledVersion,
   isFullCommitSha,
   parseLsRemote,
@@ -15,6 +18,8 @@ import {
   otaCacheIsFresh,
   uiUpdateIsNewer,
   uiServerCompatSkipReason,
+  decideStartWait,
+  startFailureMessage,
 } from './update-logic';
 
 describe('compareVersions', () => {
@@ -57,6 +62,17 @@ describe('parseInstalledVersion', () => {
 
   it('accepts a version without the v prefix', () => {
     expect(parseInstalledVersion('cowork-server 0.1.12\n')).toBe('0.1.12');
+  });
+
+  it('keeps the rc suffix intact (staging pre-release stream)', () => {
+    // Truncating to the phantom base release froze rc→rc updates and made
+    // rollback pin a version that does not exist on PyPI.
+    expect(parseInstalledVersion('cowork-server v0.26.7.23.2rc1\n')).toBe('0.26.7.23.2rc1');
+  });
+
+  it('drops dev/local tails but keeps the release (and any rc) prefix', () => {
+    expect(parseInstalledVersion('cowork-server v0.26.7.6.4.dev40+g82a1da968\n')).toBe('0.26.7.6.4');
+    expect(parseInstalledVersion('cowork-server v0.26.7.23.2rc2.dev3+gabc1234\n')).toBe('0.26.7.23.2rc2');
   });
 });
 
@@ -449,5 +465,205 @@ describe('uiServerCompatSkipReason', () => {
     expect(uiServerCompatSkipReason({ minServerVersion: '0.26.7.6.1', serverVersion: '0.26.7.6.1' })).toBeNull();
     expect(uiServerCompatSkipReason({ minServerVersion: '0.26.7.6.1', serverVersion: '0.26.7.13.1' })).toBeNull();
     expect(uiServerCompatSkipReason({ minServerVersion: '0.26.7.6.1', serverVersion: '0.26.7.6.4.dev40+g82a1da968' })).toBeNull();
+  });
+});
+
+describe('compareVersions rc ordering (staging pre-release stream)', () => {
+  it('an rc precedes its own base release', () => {
+    expect(compareVersions('0.26.7.23.1rc2', '0.26.7.23.1')).toBeLessThan(0);
+    expect(compareVersions('0.26.7.23.1', '0.26.7.23.1rc2')).toBeGreaterThan(0);
+  });
+
+  it('rc numbers order among themselves', () => {
+    expect(compareVersions('0.26.7.23.1rc2', '0.26.7.23.1rc1')).toBeGreaterThan(0);
+    expect(compareVersions('0.26.7.23.1rc2', '0.26.7.23.1rc2')).toBe(0);
+  });
+
+  it('an rc of a higher base beats a lower stable', () => {
+    expect(compareVersions('0.26.7.23.2rc1', '0.26.7.23.1')).toBeGreaterThan(0);
+  });
+
+  it('plain versions keep their historical numeric ordering', () => {
+    expect(compareVersions('0.26.7.23.2', '0.26.7.23.10')).toBeLessThan(0);
+    expect(compareVersions('0.26.7.23', '0.26.7.23.0')).toBe(0);
+  });
+
+  it('rc segments deeper comparisons continue past an equal rc pair', () => {
+    expect(compareVersions('0.1rc1.5', '0.1rc1.4')).toBeGreaterThan(0);
+  });
+});
+
+describe('selectLatestPypiVersion', () => {
+  const releases = {
+    '0.26.7.20.1': [{ yanked: false }],
+    '0.26.7.23.1rc1': [{ yanked: false }],
+    '0.26.7.23.1rc2': [{ yanked: false }],
+  };
+
+  it('prod path trusts info.version and never scans pre-releases', () => {
+    expect(selectLatestPypiVersion({ infoVersion: '0.26.7.20.1', releases, includePrereleases: false }))
+      .toBe('0.26.7.20.1');
+  });
+
+  it('pre-release path picks the PEP 440 maximum across stable and rc', () => {
+    expect(selectLatestPypiVersion({ infoVersion: '0.26.7.20.1', releases, includePrereleases: true }))
+      .toBe('0.26.7.23.1rc2');
+  });
+
+  it('a newer stable beats older rcs on the pre-release path too', () => {
+    const withNewStable = { ...releases, '0.26.7.24.1': [{ yanked: false }] };
+    expect(selectLatestPypiVersion({ infoVersion: '0.26.7.24.1', releases: withNewStable, includePrereleases: true }))
+      .toBe('0.26.7.24.1');
+  });
+
+  it('is order-independent (max survives older candidates listed after it)', () => {
+    const descending = { '0.26.7.24.1': [{ yanked: false }], '0.26.7.23.1rc1': [{ yanked: false }] };
+    expect(selectLatestPypiVersion({ infoVersion: null, releases: descending, includePrereleases: true }))
+      .toBe('0.26.7.24.1');
+  });
+
+  it('skips fully-yanked, empty, and unparseable releases', () => {
+    const messy = {
+      '0.26.7.23.1rc1': [{ yanked: false }],
+      '0.26.7.25.1': [{ yanked: true }],
+      '0.26.7.26.1': [],
+      '0.26.7.23.1rc3+local': [{ yanked: false }],
+      '0.26.7.23.1.dev4': [{ yanked: false }],
+    };
+    expect(selectLatestPypiVersion({ infoVersion: null, releases: messy, includePrereleases: true }))
+      .toBe('0.26.7.23.1rc1');
+  });
+
+  it('a partially-yanked release (one live file) still counts', () => {
+    const partial = { '0.26.7.27.1': [{ yanked: true }, { yanked: false }] };
+    expect(selectLatestPypiVersion({ infoVersion: null, releases: partial, includePrereleases: true }))
+      .toBe('0.26.7.27.1');
+  });
+
+  it('tolerates malformed release entries (non-array files, null file objects)', () => {
+    const malformed = {
+      '0.26.7.28.1': null,
+      '0.26.7.23.1rc1': [null, { yanked: false }],
+    } as unknown as Record<string, Array<{ yanked?: boolean }>>;
+    expect(selectLatestPypiVersion({ infoVersion: null, releases: malformed, includePrereleases: true }))
+      .toBe('0.26.7.23.1rc1');
+  });
+
+  it('falls back to info.version when nothing scannable remains', () => {
+    expect(selectLatestPypiVersion({ infoVersion: '0.26.7.20.1', releases: {}, includePrereleases: true }))
+      .toBe('0.26.7.20.1');
+    expect(selectLatestPypiVersion({ infoVersion: null, releases: null, includePrereleases: true }))
+      .toBeNull();
+    expect(selectLatestPypiVersion({ infoVersion: '', releases: undefined, includePrereleases: false }))
+      .toBeNull();
+  });
+});
+
+describe('parseAntonPin', () => {
+  it('extracts an exact rc pin from Requires-Dist', () => {
+    expect(parseAntonPin(['httpx>=0.27', 'anton-agent==2.26.7.23.1rc1', 'uvicorn>=0.47.0']))
+      .toBe('2.26.7.23.1rc1');
+  });
+
+  it('tolerates spaces and environment markers', () => {
+    expect(parseAntonPin(['anton-agent == 2.26.7.20.1 ; python_version >= "3.12"']))
+      .toBe('2.26.7.20.1');
+  });
+
+  it('returns null for loose constraints (stable wheels need no restatement)', () => {
+    expect(parseAntonPin(['anton-agent<3,>=2.26.6.30.1'])).toBeNull();
+    expect(parseAntonPin(['anton-agent>=2.26.6.30.1,<3'])).toBeNull();
+  });
+
+  it('returns null for malformed input', () => {
+    expect(parseAntonPin(null)).toBeNull();
+    expect(parseAntonPin('anton-agent==1.0')).toBeNull();
+    expect(parseAntonPin([42, null])).toBeNull();
+    expect(parseAntonPin(['not-anton-agent==1.0'])).toBeNull();
+  });
+});
+
+describe('installerStepPlan', () => {
+  it('git channel on macOS needs the Xcode CLT step, shows git, and hard-requires it', () => {
+    expect(installerStepPlan('darwin', 'git')).toEqual({ needsXcodeStep: true, showGitStep: true, gitRequired: true });
+  });
+
+  it('pypi channel on macOS skips Xcode AND omits the git step entirely (uv only)', () => {
+    expect(installerStepPlan('darwin', 'pypi')).toEqual({ needsXcodeStep: false, showGitStep: false, gitRequired: false });
+  });
+
+  it('never plans an Xcode step off macOS, but git is shown + required on the git channel', () => {
+    expect(installerStepPlan('win32', 'git')).toEqual({ needsXcodeStep: false, showGitStep: true, gitRequired: true });
+    expect(installerStepPlan('linux', 'git')).toEqual({ needsXcodeStep: false, showGitStep: true, gitRequired: true });
+  });
+
+  it('pypi channel omits the git step on every platform (git is never shown or required)', () => {
+    expect(installerStepPlan('win32', 'pypi')).toEqual({ needsXcodeStep: false, showGitStep: false, gitRequired: false });
+    expect(installerStepPlan('linux', 'pypi')).toEqual({ needsXcodeStep: false, showGitStep: false, gitRequired: false });
+  });
+});
+
+describe('decideStartWait', () => {
+  const base = { healthy: false, spawnError: null, exited: false, elapsedMs: 0, capMs: 90_000 };
+
+  it('keeps polling while the child is alive, silent, and inside the cap', () => {
+    expect(decideStartWait({ ...base, elapsedMs: 40_000 })).toEqual({ action: 'poll' });
+  });
+
+  it('is ready as soon as /health answers, however long it took', () => {
+    expect(decideStartWait({ ...base, healthy: true, elapsedMs: 89_000 })).toEqual({ action: 'ready' });
+  });
+
+  it('is ready when /health answers even though the process we spawned has exited', () => {
+    // The Windows launcher hands off to a python child and can exit itself;
+    // the server it started is up, so this is a success, not a death.
+    expect(decideStartWait({ ...base, healthy: true, exited: true })).toEqual({ action: 'ready' });
+  });
+
+  it('fails immediately on a spawn error, without waiting out the cap', () => {
+    expect(decideStartWait({ ...base, spawnError: 'spawn EPERM', elapsedMs: 10 }))
+      .toEqual({ action: 'fail', kind: 'spawn-error' });
+  });
+
+  it('reports a spawn error ahead of the exit it also produced', () => {
+    expect(decideStartWait({ ...base, spawnError: 'spawn ENOENT', exited: true }))
+      .toEqual({ action: 'fail', kind: 'spawn-error' });
+  });
+
+  it('fails the moment an unhealthy child exits, long before the cap', () => {
+    expect(decideStartWait({ ...base, exited: true, elapsedMs: 900 }))
+      .toEqual({ action: 'fail', kind: 'exited' });
+  });
+
+  it('fails on the cap only while the child is still alive', () => {
+    expect(decideStartWait({ ...base, elapsedMs: 90_000 })).toEqual({ action: 'fail', kind: 'timeout' });
+    expect(decideStartWait({ ...base, elapsedMs: 90_001 })).toEqual({ action: 'fail', kind: 'timeout' });
+  });
+});
+
+describe('startFailureMessage', () => {
+  it('names the spawn error rather than blaming the health check', () => {
+    expect(startFailureMessage({ kind: 'spawn-error', exitCode: null, spawnError: 'spawn EPERM', elapsedMs: 12 }))
+      .toBe('The backend could not be launched: spawn EPERM.');
+  });
+
+  it('falls back to a generic reason when the spawn error is missing', () => {
+    expect(startFailureMessage({ kind: 'spawn-error', exitCode: null, spawnError: null, elapsedMs: 12 }))
+      .toBe('The backend could not be launched: unknown spawn error.');
+  });
+
+  it('reports the exit code and keeps a decimal on a fast death', () => {
+    expect(startFailureMessage({ kind: 'exited', exitCode: 1, spawnError: null, elapsedMs: 3400 }))
+      .toBe('The backend exited while starting up (code 1) after 3.4s.');
+  });
+
+  it('says so when the process died without an exit code', () => {
+    expect(startFailureMessage({ kind: 'exited', exitCode: null, spawnError: null, elapsedMs: 15_000 }))
+      .toBe('The backend exited while starting up (no exit code) after 15s.');
+  });
+
+  it('distinguishes "still starting" from "never started"', () => {
+    expect(startFailureMessage({ kind: 'timeout', exitCode: null, spawnError: null, elapsedMs: 90_000 }))
+      .toBe('The backend was still starting after 90s and never answered /health.');
   });
 });

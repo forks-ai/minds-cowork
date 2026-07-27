@@ -7,17 +7,21 @@
 
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { host } from '../../platform/host';
-import { BASE, fetchRecommendedModels } from '../../cowork/api';
+import { BASE, authFetch, fetchRecommendedModels } from '../../cowork/api';
 import { recommendedModelOptions, type ProviderModel } from '../../cowork/lib/settingsTransform';
 import { MINDS_API_BASE, MINDS_REGISTER_URL } from '../../lib/mindsUrls';
-import { syncSettingsToDb } from '../../lib/syncSettings';
+import { syncSettingsToDb, syncModelsToDb, modelLinesFrom } from '../../lib/syncSettings';
 import { ArcadeShell, PixelMarquee } from './components';
 import { PixelSprite, type SpriteName } from './sprites';
 import { LegalViewer } from './TermsScreen';
 
 type Provider = 'minds' | 'byok';
 type ByokProvider = 'anthropic' | 'openai' | 'gemini' | 'openai-compatible';
-type Phase = 'choose' | 'validating' | 'minds-no-llm' | 'success' | 'error';
+// 'signup-wait': browser is on Keycloak's registration flow, possibly parked
+// on email verification for minutes (ENG-917). 'signup-verify': that wait
+// timed out — the account likely exists and is verified, one Sign-in click
+// finishes; deliberately an info state, never an error.
+type Phase = 'choose' | 'validating' | 'signup-wait' | 'signup-verify' | 'minds-no-llm' | 'success' | 'error';
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/';
 
@@ -47,7 +51,7 @@ async function mindsProbeModel(): Promise<string> {
 /** Persist the cartridge choice as the `harness` setting (best-effort). */
 async function syncHarness(harnessId: string): Promise<void> {
   try {
-    await fetch(`${BASE}/settings/harness`, {
+    await authFetch(`${BASE}/settings/harness`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ value: harnessId }),
@@ -55,41 +59,18 @@ async function syncHarness(harnessId: string): Promise<void> {
   } catch {}
 }
 
-// Explicitly persist a model chosen during onboarding to the DB (best-effort).
-//
-// ENG-739: model keys were removed from `syncSettingsToDb`'s map so a bulk
-// .env re-sync (login / post-install / web token-refresh) can never re-pin a
-// user who recovered via the picker. Onboarding is a genuine explicit choice,
-// so it writes its model here — the only non-picker path allowed to. A minds
-// onboarding writes no model line (the backend resolves the tier-aware
-// default), so this is a no-op there.
-async function syncOnboardingModels(lines: string[]): Promise<void> {
-  const KEY_MAP: Record<string, string> = {
-    ANTON_PLANNING_MODEL: 'planning_model',
-    ANTON_CODING_MODEL: 'coding_model',
-  };
-  for (const line of lines) {
-    const eq = line.indexOf('=');
-    if (eq <= 0) continue;
-    const settingKey = KEY_MAP[line.slice(0, eq)];
-    const value = line.slice(eq + 1);
-    if (!settingKey || !value) continue;
-    try {
-      await fetch(`${BASE}/settings/${settingKey}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ value }),
-      });
-    } catch { /* best-effort — the backend's apply_model_defaults still yields a model */ }
-  }
-}
+// The onboarding model write lives in lib/syncSettings as `syncModelsToDb` — the
+// only non-picker path allowed to set a model (ENG-739) — so both onboarding and
+// the post-install replay (ENG-922) share one implementation.
 
 export interface PersistDeps {
   /** .env write — best-effort in web (loopback-gated, ENG-817), throws on a real error. */
   saveSettings: (content: string) => Promise<boolean>;
   /** Authoritative DB write (PUT /settings/:key). Returns false if any key failed. */
   syncToDb: (lines: string[]) => Promise<boolean>;
-  syncModels: (lines: string[]) => Promise<void>;
+  /** Best-effort model write here (result ignored on the success path — server
+   *  is up); the return type is widened so syncModelsToDb's boolean fits. */
+  syncModels: (lines: string[]) => Promise<unknown>;
   syncHarness: () => Promise<void>;
 }
 
@@ -122,9 +103,23 @@ export async function persistOnboarding(
       };
     }
     // syncModels writes the model keys the bulk DB sync intentionally skips
-    // (ENG-739); harness records the chosen cartridge. Both best-effort.
-    await deps.syncModels(lines);
-    await deps.syncHarness();
+    // (ENG-739); harness records the chosen cartridge. Both are best-effort:
+    // the config has ALREADY persisted authoritatively (dbOk), so a flaky
+    // model/harness sync must NOT bounce the user to the error screen over a
+    // saved config (ENG-848). Each gets its own catch so one failing can't
+    // skip the other (#435 review). Logged because a dropped model write does
+    // NOT self-heal (model keys ride neither the bulk re-sync nor the startup
+    // migration — ENG-739/922).
+    try {
+      await deps.syncModels(lines);
+    } catch (e) {
+      console.error('[onboarding] best-effort model sync failed', e);
+    }
+    try {
+      await deps.syncHarness();
+    } catch (e) {
+      console.error('[onboarding] best-effort harness sync failed', e);
+    }
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e instanceof Error && e.message ? e.message : GENERIC };
@@ -212,7 +207,13 @@ export default function OnboardingScreen({
 }: {
   /** Cartridge chosen on the select screen; persisted with the settings. */
   coworker: { id: string; label: string; sprite: SpriteName };
-  onComplete: () => void;
+  /**
+   * Advance out of onboarding. On the setup-deferral path (fresh install, server
+   * not up yet) the caller receives the just-chosen `ANTON_*_MODEL` lines so the
+   * post-install handshake can replay them once (ENG-922); omitted on every
+   * other path.
+   */
+  onComplete: (deferredModelLines?: string[]) => void;
   /** Optional — returns to the coworker-select screen. */
   onBack?: () => void;
 }) {
@@ -347,7 +348,7 @@ export default function OnboardingScreen({
       {
         saveSettings: (c) => host.saveSettings(c),
         syncToDb: syncSettingsToDb,
-        syncModels: syncOnboardingModels,
+        syncModels: syncModelsToDb,
         syncHarness: () => syncHarness(coworker.id),
       },
       lines,
@@ -363,7 +364,13 @@ export default function OnboardingScreen({
     if (outcome.action === 'defer') {
       // Server isn't up yet — skip the "success" flash (misleading here) and
       // let onComplete's checkInstall gate show the setup/install screen.
-      onComplete();
+      // persistOnboarding stopped at the failed DB sync, BEFORE syncModels, so
+      // the chosen model never reached the DB and the post-install bulk .env
+      // re-sync deliberately excludes model keys (ENG-739). Hand the just-chosen
+      // model lines up so the post-install handshake replays them once —
+      // otherwise a non-Anthropic BYOK user lands config-not-ready ("Select a
+      // model"). In-memory choice, never a .env re-read (ENG-922).
+      onComplete(modelLinesFrom(lines));
       return;
     }
     setPhase('success');
@@ -511,12 +518,49 @@ export default function OnboardingScreen({
           `Sign-in timed out — the browser never finished authorizing. Try again and complete the newest tab it opens (close any older "You're authorized" tabs), or press ${reloadKey} to reload.`,
         );
       } else if (/cancelled/i.test(reason)) {
-        setErrorMsg('Sign-in was cancelled. Press Sign in with MindsHub to try again.');
+        setErrorMsg('Sign-in was cancelled. Try again whenever you’re ready.');
       } else {
         setErrorMsg(reason || 'Sign in failed. Please try again.');
       }
       return;
     }
+    await completeMindsAuth();
+  };
+
+  // Sign-up (ENG-917): the same loopback PKCE flow as sign-in, entered
+  // through Keycloak's registration form. The browser leg legitimately
+  // pauses on email verification — sometimes minutes — so the pending
+  // state gets its own copy, and the eventual timeout degrades to a
+  // "verified? just sign in" nudge instead of an error.
+  const handleMindsSignup = async () => {
+    setPhase('signup-wait');
+    setErrorMsg('');
+    const result = await host.mindshubSignup();
+    if (!result.ok) {
+      const reason = String(result.reason || '');
+      if (/cancelled/i.test(reason)) {
+        // Explicit cancel, or superseded by a Sign-in click (the flows are
+        // single-flight in main). Whoever took over owns the phase — only
+        // reset if the wait screen is still the one showing.
+        setPhase((p) => (p === 'signup-wait' ? 'choose' : p));
+        return;
+      }
+      if (/timed out/i.test(reason)) {
+        setPhase('signup-verify');
+        return;
+      }
+      setPhase('error');
+      setErrorMsg(reason || 'Sign up failed. Please try again.');
+      return;
+    }
+    await completeMindsAuth();
+  };
+
+  // Post-auth completion shared by sign-in and sign-up: once Keycloak hands
+  // back tokens the two flows are identical — provision the LLM key, route
+  // free users to the paywall/BYOK, commit the env on success.
+  const completeMindsAuth = async () => {
+    setPhase('validating'); // no-op for sign-in; moves sign-up off its wait screen
     let finalizeResult: { ok: boolean; reason?: string; upgradeRequired?: boolean; apiKey?: string };
     try {
       finalizeResult = await host.mindshubFinalize();
@@ -662,6 +706,25 @@ export default function OnboardingScreen({
     </div>
   );
 
+  // ── Sign-up pending overlay (ENG-917) ──────────────────────────────
+  // Shown while the browser owns the registration flow. The email-verify
+  // pause means this can sit for minutes — the copy sets that expectation,
+  // and Cancel tears the loopback listener down via the main process.
+  const signupWaitBlock = (
+    <div className="arc-stack arc-fade-in" style={{ gap: 14, padding: '12px 0' }}>
+      <PixelSprite name="bolt" size={44} title="Waiting for sign-up" />
+      <PixelMarquee cells={20} style={{ width: 280 }} />
+      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.18em', color: 'var(--arc-muted)' }}>
+        FINISH SIGN-UP IN YOUR BROWSER
+      </span>
+      <span style={{ fontSize: 11, lineHeight: 1.6, letterSpacing: '0.04em', color: 'var(--arc-dim)', textAlign: 'center', maxWidth: 340 }}>
+        Create your account, then open the verification email we send you —
+        clicking its link signs you in here automatically.
+      </span>
+      <button type="button" className="arc-link" onClick={() => host.oauthCancel()}>Cancel</button>
+    </div>
+  );
+
   // ── Stage 2: bring-your-own key ────────────────────────────────────
   // Driven by the explicit `step`, not by inferring from form contents.
   if (step === 'byok' && (phase === 'minds-no-llm' || phase === 'validating')) {
@@ -693,7 +756,7 @@ export default function OnboardingScreen({
                   setErrorMsg('');
                   setLlmApiKey('');
                 }}
-              >← back to sign in</button>
+              >← back to account options</button>
 
               <div className="arc-panel" style={{ width: '100%', boxSizing: 'border-box', padding: '20px 22px', display: 'flex', flexDirection: 'column', gap: 18, textAlign: 'left' }}>
                 <div>
@@ -798,8 +861,11 @@ export default function OnboardingScreen({
   }
 
   // ── Stage 1: MindsHub ──────────────────────────────────────────────
+  // First-run framing (ENG-914): most people seeing this screen have never
+  // used the app, so creating an account leads and signing in is one click
+  // away — not the other way round.
   return (
-    <ArcadeShell title="Sign in" subtitle="sign in or create a free account to continue">
+    <ArcadeShell title="Get started" subtitle="create a free account or sign in to continue">
       <div className="arc-stack arc-fade-in" style={{ gap: 18, width: 'min(420px, 100%)' }}>
         <div className="arc-panel" style={{ width: '100%', boxSizing: 'border-box', padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 16, textAlign: 'left', borderColor: 'color-mix(in srgb, var(--arc-cyan) 35%, transparent)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -823,19 +889,23 @@ export default function OnboardingScreen({
               <button
                 className="arc-btn"
                 style={{ width: '100%' }}
+                disabled={phase === 'validating' || phase === 'signup-wait'}
+                onClick={handleMindsSignup}
+              >
+                {phase === 'validating' ? 'One moment…' : 'Create a free account'}
+              </button>
+              {/* Stays clickable during signup-wait on purpose — the flows are
+                  single-flight in main, so a Sign-in click supersedes a parked
+                  sign-up (ENG-917). */}
+              <button
+                type="button"
+                className="arc-btn-ghost arc-btn-ghost-stacked"
+                style={{ width: '100%' }}
                 disabled={phase === 'validating'}
                 onClick={handleMindsSSO}
               >
-                {phase === 'validating' ? 'Signing in…' : 'Sign in with MindsHub'}
+                Sign in
               </button>
-              <div style={{ fontSize: 10.5, letterSpacing: '0.05em', color: 'var(--arc-dim)', textAlign: 'center' }}>
-                No account?{' '}
-                <button
-                  type="button"
-                  className="arc-link"
-                  onClick={() => host.openExternal(MINDS_REGISTER_URL)}
-                >Create one for free →</button>
-              </div>
             </>
           ) : (
             <>
@@ -874,6 +944,15 @@ export default function OnboardingScreen({
         </div>
 
         {phase === 'validating' && validatingBlock}
+        {phase === 'signup-wait' && signupWaitBlock}
+
+        {phase === 'signup-verify' && (
+          <div className="arc-panel" role="status" style={{ padding: '14px 18px', fontSize: 11.5, lineHeight: 1.7, letterSpacing: '0.04em', color: 'var(--arc-muted)', textAlign: 'center' }}>
+            Verified your email? You're one click away — hit{' '}
+            <b style={{ color: 'var(--arc-ink)' }}>Sign in</b> to finish.
+            No need to register again.
+          </div>
+        )}
 
         {phase === 'error' && (
           <div className="arc-error" role="alert">
@@ -887,6 +966,10 @@ export default function OnboardingScreen({
             type="button"
             className="arc-link"
             onClick={() => {
+              // Leaving for BYOK abandons any parked sign-up — tear its
+              // loopback listener down so a later email-link click can't
+              // yank the user back into the MindsHub path.
+              if (phase === 'signup-wait') host.oauthCancel();
               setProvider('byok');
               setStep('byok');
               setApiKey('');

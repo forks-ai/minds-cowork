@@ -7,7 +7,7 @@
 import { initialStreamState, reduceStream, iterateSSE } from './lib/responseStreamAdapter';
 import { host } from '../platform/host';
 import { relativeAge } from './lib/formatTime';
-import { transformSettingsRows, diffSettingsForWrite } from './lib/settingsTransform';
+import { transformSettingsRows, diffSettingsForWrite, mergeRecommendedModels } from './lib/settingsTransform';
 import {
   buildMemoryDeletePayload,
   buildMemoryWritePayload,
@@ -20,14 +20,24 @@ const API_ORIGIN = host.getApiOrigin();
 export const BASE = `${API_ORIGIN}/api/v1`;
 const ROOT_BASE = `${API_ORIGIN}`;
 
-// Thin wrapper around fetch() for server calls. In the desktop app the Electron
-// main process injects the bearer token (when the server runs with
-// COWORK_REQUIRE_AUTH=true) into every request to the loopback API via a
-// session webRequest hook — see src/main/index.ts. The token never reaches the
-// renderer, and browser-initiated loads (images, iframes, downloads) are
-// covered too, so there's nothing to attach here. In web mode the SPA is
-// same-origin with the server and relies on the session cookie.
-async function authFetch(url, options = {}) {
+// Thin wrapper around fetch() for server calls.
+//
+// Web: attach the Keycloak access token as `Authorization: Bearer` so the
+// ingress auth subrequest (auth-service /v1/authenticate) can validate the
+// caller, mirroring the MindsHub console (mindshub_frontend). host.getAccessToken
+// refreshes the token as needed.
+//
+// Electron: the main process injects the loopback server's bearer token (when
+// COWORK_REQUIRE_AUTH=true) into every request via a session webRequest hook
+// (src/main/index.ts). That token never reaches the renderer and is NOT the
+// Keycloak token, so nothing is attached here.
+export async function authFetch(url, options = {}) {
+  if (host.isWeb) {
+    const token = await host.getAccessToken();
+    if (token) {
+      options = { ...options, headers: { ...(options.headers || {}), Authorization: `Bearer ${token}` } };
+    }
+  }
   return fetch(url, options);
 }
 
@@ -129,7 +139,18 @@ function _failedEventMeta(events) {
   if (!Array.isArray(events)) return null;
   const ev = [...events].reverse().find((e) => e?.type === 'response.failed');
   if (!ev) return null;
-  return { code: ev.code || null, message: ev.error || ev.message || '' };
+  return {
+    code: ev.code || null,
+    message: ev.error || ev.message || '',
+    // Carry the card context so a RELOADED failure renders the same affordance
+    // as the live one. Without these, reconnectable is undefined on reload and
+    // the provider_overloaded / provider_auth cards mis-nudge a managed user
+    // toward MindsHub (violating the ENG-514 guardrail) — see ENG-673. Mirrors
+    // App.jsx's failedEventMeta (the two hydrate paths must agree on this).
+    reconnectable: ev.reconnectable ?? null,
+    providerLabel: ev.provider_label ?? null,
+    failedModel: ev.model ?? null,
+  };
 }
 
 // Replay the server-persisted SSE event log through the live stream
@@ -165,6 +186,9 @@ function _hydrateAssistantEvents(messages) {
         role: 'error',
         content: failed?.message || 'An unexpected error occurred.',
         code: failed?.code || null,
+        reconnectable: failed?.reconnectable ?? null,
+        providerLabel: failed?.providerLabel ?? null,
+        failedModel: failed?.failedModel ?? null,
       });
     }
   }
@@ -982,9 +1006,14 @@ let _settingsLock = Promise.resolve();
    the `reasoning_efforts`/`default_reasoning_effort` it advertises) and merges a
    static effort catalog for direct providers. Returns null on any failure so the
    caller keeps the static lists baked into transformSettingsRows. */
-export async function fetchRecommendedModels() {
+export async function fetchRecommendedModels({ refresh = false } = {}) {
   try {
-    const data = await req('/settings/recommended-models');
+    // `refresh` bypasses the server's fetch_minds_models cache (up to a
+    // 5-minute TTL) — the model dropdown passes it on open so a wallet top-up
+    // isn't masked by the cached `enabled` map. A cached *failure* is still
+    // honored server-side, so this can't cost every open an HTTP timeout while
+    // MindsHub is down.
+    const data = await req(`/settings/recommended-models${refresh ? '?refresh=true' : ''}`);
     if (data && typeof data === 'object') return data;
   } catch { /* fall back to static lists */ }
   return null;
@@ -1003,26 +1032,15 @@ export async function fetchSettings() {
       } catch { /* leave defaults */ }
       /* Overlay the live model list + effort capability. modelEfforts is the
          single source of truth for the effort picker — a model accepts effort
-         iff it has an entry here. Only non-empty server lists override the static
-         fallback, so an unconfigured provider (e.g. minds-cloud with no key →
-         server returns []) doesn't wipe the baked-in picks. */
-      const rec = await fetchRecommendedModels();
-      if (rec) {
-        const overlayLists = (base, live) => {
-          const merged = { ...base };
-          for (const [k, v] of Object.entries(live || {})) {
-            if (Array.isArray(v) && v.length) merged[k] = v;
-          }
-          return merged;
-        };
-        result.recommendedModels = overlayLists(result.recommendedModels, rec.recommendedModels);
-        result.recommendedPair = overlayLists(result.recommendedPair, rec.recommendedPair);
-        result.modelEfforts = rec.modelEfforts || {};
-        // Per-model availability: MindsHub lists models the user's tier can't
-        // use (marked enabled:false) so the picker shows them greyed as
-        // upgrade prompts. Absent id ⇒ available (backwards compatible).
-        result.modelEnabled = rec.modelEnabled || {};
-      }
+         iff it has an entry here. modelEnabled marks the models MindsHub's
+         wallet can't currently pay for so the picker greys them with an "add
+         credits" prompt (absent id ⇒ available), and modelLabels carries the
+         policy's display name per id (absent ⇒ id-derived at the render site).
+         mergeRecommendedModels owns the don't-let-an-empty-response-wipe-what-
+         we-have rule; SettingsView's on-open refresh goes through the same
+         function. */
+      const merged = mergeRecommendedModels(result, await fetchRecommendedModels());
+      if (merged) Object.assign(result, merged);
       _lastFetchedSettings = result;
       return result;
     } catch {
@@ -1151,7 +1169,7 @@ export async function saveSkill(payload, isEdit = false) {
 export async function uploadSkillFile(file) {
   const form = new FormData();
   form.append('file', file, file.name);
-  const res = await fetch(BASE + '/skills/upload', { method: 'POST', body: form });
+  const res = await authFetch(BASE + '/skills/upload', { method: 'POST', body: form });
   if (!res.ok) throw await responseError(res, `Upload failed (${res.status})`);
   return res.json();
 }

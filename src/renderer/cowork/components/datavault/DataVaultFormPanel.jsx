@@ -16,6 +16,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Ico from '../Icons';
+import { Button } from '../ui';
 import { DataVaultForm } from './DataVaultForm';
 import {
   clearForm, getForm, patchForm, subscribe,
@@ -40,28 +41,6 @@ function getBrowserOAuthMethod(spec) {
 }
 
 const FONT_BODY = 'var(--font-body)';
-
-// One-shot keyframes used by the form: appearance animation on the
-// panel + the small spinner inside the live status row. Mounting
-// these once at the module level (rather than per-component) keeps
-// the DOM clean and ensures the rules are present before either
-// child renders.
-let _DVF_KEYFRAMES_INJECTED = false;
-function _ensureKeyframes() {
-  if (_DVF_KEYFRAMES_INJECTED) return;
-  if (typeof document === 'undefined') return;
-  const style = document.createElement('style');
-  style.setAttribute('data-dvf-keyframes', '');
-  style.textContent = `
-@keyframes dvf-spin { to { transform: rotate(360deg); } }
-@keyframes dvf-appear {
-  from { opacity: 0; transform: translateY(6px) scale(0.985); }
-  to   { opacity: 1; transform: translateY(0)   scale(1); }
-}
-`;
-  document.head.appendChild(style);
-  _DVF_KEYFRAMES_INJECTED = true;
-}
 
 export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNavigateToConnectors, highlighted = false }) {
   const [spec, setSpec] = useState(() => getForm(conversationId));
@@ -90,7 +69,6 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
     () => (conversationId ? getSelectedMethod(conversationId) : null)
   );
 
-  useEffect(() => { _ensureKeyframes(); }, []);
   useEffect(() => () => { if (oauthPollRef.current) clearInterval(oauthPollRef.current); }, []);
 
   useEffect(() => {
@@ -715,7 +693,7 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
                 borderRadius: '50%',
                 border: '2.5px solid color-mix(in srgb, var(--accent) 25%, transparent)',
                 borderTopColor: 'var(--accent)',
-                animation: 'dvf-spin 720ms linear infinite',
+                animation: 'spin 720ms linear infinite',
               }}
             />
             <span style={{ color: 'var(--ink-2)', fontSize: 13, textAlign: 'center' }}>
@@ -742,8 +720,8 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
                 </div>
               )}
             </div>
-            <button
-              type="button"
+            <Button
+              variant="primary"
               onClick={() => {
                 const fieldsPatch = {};
                 if (Array.isArray(spec.fields)) {
@@ -773,19 +751,10 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
                   ...(Object.keys(methodsPatch).length ? { methods: methodsPatch } : {}),
                 });
               }}
-              style={{
-                alignSelf: 'flex-start',
-                padding: '6px 14px', borderRadius: 7,
-                background: 'var(--accent)', border: 0,
-                color: '#fff', fontSize: 13, fontWeight: 600,
-                cursor: 'pointer', fontFamily: FONT_BODY,
-                transition: 'opacity 140ms ease',
-              }}
-              onMouseOver={(e) => { e.currentTarget.style.opacity = '0.85'; }}
-              onMouseOut={(e) => { e.currentTarget.style.opacity = '1'; }}
+              style={{ alignSelf: 'flex-start' }}
             >
               Try again
-            </button>
+            </Button>
           </div>
         ) : (
           /* Normal / success / parse-error state — render the form as usual. */
@@ -810,7 +779,7 @@ export function DataVaultFormPanel({ conversationId, onContinue, onSubmit, onNav
                     borderRadius: '50%',
                     border: '2px solid color-mix(in srgb, var(--accent) 30%, transparent)',
                     borderTopColor: 'var(--accent)',
-                    animation: 'dvf-spin 720ms linear infinite',
+                    animation: 'spin 720ms linear infinite',
                   }}
                 />
                 <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

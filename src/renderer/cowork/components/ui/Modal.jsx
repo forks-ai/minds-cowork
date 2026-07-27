@@ -15,8 +15,8 @@
 //     <ModalHeader id="connect-title" title="Connect a tool" subtitle="…" onClose={close} />
 //     <ModalBody> …content… </ModalBody>
 //     <ModalFooter>
-//       <button onClick={close}>Cancel</button>
-//       <button className="btn-primary" onClick={save}>Save</button>
+//       <Button variant="subtle" onClick={close}>Cancel</Button>
+//       <Button variant="primary" onClick={save}>Save</Button>
 //     </ModalFooter>
 //   </Modal>
 //
@@ -25,6 +25,22 @@
 
 import { Dialog } from '@base-ui/react/dialog';
 import Ico from '../Icons';
+
+// Opacity-only fade for the backdrop/popup on open/close (styled with
+// Tailwind's `data-[]:` variants, matching ui/Menu.jsx / Select.jsx — no
+// runtime-injected stylesheet needed). Opacity-only (no transform) on
+// purpose — a non-identity `transform` on an ancestor makes it the
+// containing block for `position: fixed` descendants, which broke
+// popovers/menus rendered inside a modal (the ArtifactViewer kebab menu
+// in particular). Driven by Base UI's `data-starting-style` so the fade
+// replays on every open; `data-ending-style` zeroes the duration so
+// close is an instant unmount (matches the previous modal, which had no
+// exit animation). The base transition is written as a full arbitrary
+// `[transition:...]` property (not Tailwind's `duration-*`/`ease-*`
+// utilities) so the easing keyword is the literal CSS `ease-out`, not
+// Tailwind's differently-curved `ease-out` utility value.
+const FADE_BACKDROP = 'opacity-100 [transition:opacity_160ms_ease-out] data-[starting-style]:opacity-0 data-[ending-style]:duration-0';
+const FADE_POPUP     = 'opacity-100 [transition:opacity_180ms_ease-out] data-[starting-style]:opacity-0 data-[ending-style]:duration-0';
 
 const FONT_BODY    = 'var(--font-body)';
 
@@ -51,33 +67,6 @@ const LAYERS = {
   system:  1200,
 };
 
-// One-shot appearance styles. Opacity-only (no transform) on purpose — a
-// non-identity `transform` on an ancestor makes it the containing block for
-// `position: fixed` descendants, which broke popovers/menus rendered inside a
-// modal (the ArtifactViewer kebab menu in particular). Driven by Base UI's
-// `data-starting-style` so the fade replays on every open; `data-ending-style`
-// zeroes the transition so close is an instant unmount (matches the previous
-// modal, which had no exit animation).
-let _MODAL_STYLES_INJECTED = false;
-function _ensureModalStyles() {
-  if (_MODAL_STYLES_INJECTED) return;
-  if (typeof document === 'undefined') return;
-  const style = document.createElement('style');
-  style.setAttribute('data-modal-styles', '');
-  style.textContent = `
-.cw-modal-backdrop { opacity: 1; transition: opacity 160ms ease-out; }
-.cw-modal-backdrop[data-starting-style] { opacity: 0; }
-.cw-modal-backdrop[data-ending-style]   { transition-duration: 0ms; }
-.cw-modal-popup { opacity: 1; transition: opacity 180ms ease-out; }
-.cw-modal-popup[data-starting-style] { opacity: 0; }
-.cw-modal-popup[data-ending-style]   { transition-duration: 0ms; }
-`;
-  document.head.appendChild(style);
-  _MODAL_STYLES_INJECTED = true;
-}
-_ensureModalStyles();
-
-
 export function Modal({
   open,
   onClose,
@@ -102,6 +91,11 @@ export function Modal({
   width,
   height,
   maxHeight,
+  // Full-viewport bare surface (mobile full-page): fills the screen with no
+  // card chrome (border/radius/shadow) and respects safe-area insets. Still a
+  // real Base UI dialog, so it keeps the focus trap + restore, scroll lock,
+  // and Esc dismissal a hand-rolled full-screen <div> would drop.
+  fullBleed = false,
   children,
 }) {
   const sz = SIZES[size] || SIZES.md;
@@ -128,7 +122,7 @@ export function Modal({
     >
       <Dialog.Portal>
         <Dialog.Backdrop
-          className="cw-modal-backdrop"
+          className={FADE_BACKDROP}
           style={{
             position: 'fixed', inset: 0, zIndex: z,
             background: 'rgba(0,0,0,0.45)',
@@ -146,16 +140,28 @@ export function Modal({
           }}
         >
           <Dialog.Popup
-            className="cw-modal-popup"
+            className={FADE_POPUP}
             aria-labelledby={labelledBy || undefined}
             aria-label={ariaLabel || undefined}
             style={{
-              width: width || sz.width,
-              ...(height ? { height } : { maxHeight: maxHeight || sz.maxHeight }),
-              background: 'var(--surface)',
-              border: '1px solid var(--line)',
-              borderRadius: 14,
-              boxShadow: '0 24px 60px rgba(15,16,17,0.30)',
+              ...(fullBleed
+                ? {
+                    width: '100vw', height: '100dvh',
+                    background: 'var(--bg)',
+                    border: 'none', borderRadius: 0, boxShadow: 'none',
+                    paddingTop: 'env(safe-area-inset-top, 0)',
+                    paddingBottom: 'env(safe-area-inset-bottom, 0)',
+                    paddingLeft: 'env(safe-area-inset-left, 0)',
+                    paddingRight: 'env(safe-area-inset-right, 0)',
+                  }
+                : {
+                    width: width || sz.width,
+                    ...(height ? { height } : { maxHeight: maxHeight || sz.maxHeight }),
+                    background: 'var(--surface)',
+                    border: '1px solid var(--line)',
+                    borderRadius: 14,
+                    boxShadow: 'var(--sh-modal)',
+                  }),
               display: 'flex', flexDirection: 'column',
               overflow: 'hidden',
               outline: 'none',

@@ -10,9 +10,9 @@
 
 import { useState } from 'react';
 import Ico from '../Icons';
-import { Card } from '../ui';
-import { Badge } from '../ui/Badge';
+import { Card, Button } from '../ui';
 import { relativeTime } from '../../lib/formatTime';
+import { ScheduleStatusBadge } from './ScheduleStatusBadge';
 
 const FONT_BODY    = 'var(--font-body)';
 const FONT_DISPLAY = 'var(--font-display)';
@@ -39,16 +39,6 @@ function cadenceLabel(cadence) {
     weekly:   'Weekly',
   }[cadence] || cadence;
 }
-
-// Status badge — same conditions/labels as the old StatusPill, mapped
-// onto the shared <Badge> variant palette (amber → accent).
-function StatusBadge({ task }) {
-  if (task.running)   return <Badge size="sm" variant="accent">Running</Badge>;
-  if (!task.enabled)  return <Badge size="sm" variant="muted">Paused</Badge>;
-  if (task.lastError) return <Badge size="sm" variant="danger">Last failed</Badge>;
-  return <Badge size="sm" variant="success">Active</Badge>;
-}
-
 
 export default function ScheduleCard({
   task, busy = false,
@@ -102,7 +92,7 @@ export default function ScheduleCard({
             {task.title || 'Untitled schedule'}
           </div>
           <span style={{ flexShrink: 0 }}>
-            <StatusBadge task={task} />
+            <ScheduleStatusBadge task={task} size="sm" />
           </span>
         </div>
         {task.prompt && (
@@ -257,34 +247,9 @@ export default function ScheduleCard({
 
 function ActionButton({ icon, label, onClick, busy }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={busy}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 5,
-        padding: '5px 9px', borderRadius: 6,
-        background: 'var(--surface-2)',
-        border: '1px solid var(--line)',
-        color: 'var(--ink-2)',
-        fontFamily: FONT_BODY, fontSize: 11.5, fontWeight: 500,
-        cursor: busy ? 'not-allowed' : 'pointer',
-        opacity: busy ? 0.6 : 1,
-        transition: 'background 120ms ease, color 120ms ease, border-color 120ms ease',
-      }}
-      onMouseOver={(e) => {
-        e.currentTarget.style.background = 'var(--surface)';
-        e.currentTarget.style.borderColor = 'var(--accent)';
-        e.currentTarget.style.color = 'var(--ink)';
-      }}
-      onMouseOut={(e) => {
-        e.currentTarget.style.background = 'var(--surface-2)';
-        e.currentTarget.style.borderColor = 'var(--line)';
-        e.currentTarget.style.color = 'var(--ink-2)';
-      }}
-    >
-      <span style={{ display: 'inline-flex', color: 'currentColor' }}>{icon}</span>
+    <Button onClick={onClick} disabled={busy}>
+      {icon}
       {label}
-    </button>
+    </Button>
   );
 }

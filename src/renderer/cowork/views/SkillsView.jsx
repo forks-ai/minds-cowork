@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import Ico from '../components/Icons';
 import { PageHeader, FilterRow, SearchInput, SortPill } from '../components/collection';
-import { Menu, Button, Card } from '../components/ui';
+import { Menu, Button, Card, Select } from '../components/ui';
 import { ToggleGroup } from '../components/ui/ToggleGroup';
 import { Crumb, CrumbSep, CrumbCurrent } from '../components/ui/Crumb';
-import { Toast } from '../components/ui/Toast';
+import { useToastManager } from '../components/ui/Toast';
 import { Modal, ModalHeader, ModalBody, ModalFooter } from '../components/ui/Modal';
 import { MarkdownContent } from '../components/markdown/MarkdownContent';
 import OverflowMenu from '../components/OverflowMenu';
@@ -201,17 +201,16 @@ function SkillModal({ open, onClose, onSaved, onError, initial = null, projects 
           </div>
           <div>
             <FieldLabel>Scope</FieldLabel>
-            <select
-              aria-label="Scope"
+            <Select
+              ariaLabel="Scope"
               value={draft.project}
-              onChange={(e) => setField('project', e.target.value)}
-              style={{ ...fieldStyle, height: 34, resize: 'none', cursor: 'pointer' }}
-            >
-              <option value="">All projects</option>
-              {projects.map((p) => (
-                <option key={p.id ?? p.name} value={p.name}>{p.name}</option>
-              ))}
-            </select>
+              onValueChange={(v) => setField('project', v)}
+              style={{ ...fieldStyle, height: 34 }}
+              options={[
+                { value: '', label: 'All projects' },
+                ...projects.map((p) => ({ value: p.name, label: p.name })),
+              ]}
+            />
           </div>
           <div>
             <FieldLabel>Description</FieldLabel>
@@ -238,6 +237,7 @@ function SkillModal({ open, onClose, onSaved, onError, initial = null, projects 
       <ModalFooter>
         <Button variant="subtle" onClick={handleClose}>Cancel</Button>
         <Button variant="primary" disabled={!canSubmit} onClick={submit}>
+          {!isEdit && !busy && Ico.plus(14)}
           {busy ? 'Saving…' : isEdit ? 'Save' : 'Create'}
         </Button>
       </ModalFooter>
@@ -306,13 +306,12 @@ function UploadSkillModal({ open, onClose, onSaved, onError }) {
                 <span style={{ fontSize: 12, fontFamily: 'var(--font-body)', color: 'var(--ink-4)' }}>
                   {(file.size / 1024).toFixed(1)} KB
                 </span>
-                <button
-                  type="button"
+                <Button
+                  variant="subtle"
                   onClick={(e) => { e.stopPropagation(); setFile(null); }}
-                  style={{ background: 'none', border: 0, color: 'var(--ink-4)', cursor: 'pointer', fontSize: 12, fontFamily: 'var(--font-body)' }}
                 >
                   Remove
-                </button>
+                </Button>
               </>
             ) : (
               <>
@@ -346,6 +345,7 @@ function UploadSkillModal({ open, onClose, onSaved, onError }) {
         <Button variant="subtle" onClick={onClose}>Cancel</Button>
         {file && (
           <Button variant="primary" disabled={busy} onClick={upload}>
+            {!busy && Ico.upload(14)}
             {busy ? 'Uploading…' : 'Upload'}
           </Button>
         )}
@@ -364,7 +364,7 @@ function CreateSkillDropdown({ onWrite, onUpload, onCowork }) {
   ];
   const trigger = (
     <Button
-      variant="solid"
+      variant="primary"
       style={{ display: 'inline-flex', alignItems: 'center', gap: 8, paddingRight: 10 }}
     >
       {Ico.plus(14)}
@@ -388,7 +388,7 @@ export default function SkillsView({ onCreateWithCowork, onTryInChat }) {
   const [selected, setSelected]       = useState(null);
   const [modalSkill, setModalSkill]   = useState(null); // null = closed, undefined = new, skill = edit
   const [uploadOpen, setUploadOpen]   = useState(false);
-  const [toast, setToast]             = useState(null); // { message, type }
+  const toastManager = useToastManager();
   const [search, setSearch]           = useState('');
   const [sortBy, setSortBy]           = useState('name');
   const [view, setView]               = useState(() => localStorage.getItem('anton:skills-view') === 'list' ? 'list' : 'grid');
@@ -396,7 +396,8 @@ export default function SkillsView({ onCreateWithCowork, onTryInChat }) {
 
   const handleViewChange = (v) => { setView(v); localStorage.setItem('anton:skills-view', v); };
 
-  const showToast = (msg, type = 'error') => setToast({ message: msg, type });
+  // type: 'success' | 'error' (mapped to the shared Toast's 'danger').
+  const showToast = (msg, type = 'error') => toastManager.add({ title: msg, type: type === 'error' ? 'danger' : type });
 
   useEffect(() => {
     fetchProjects().then(setProjects);
@@ -584,7 +585,6 @@ export default function SkillsView({ onCreateWithCowork, onTryInChat }) {
         initial={modalSkill ?? null}
         projects={projects}
       />
-      <Toast message={toast?.message} type={toast?.type} onClose={() => setToast(null)} />
     </div>
   );
 }

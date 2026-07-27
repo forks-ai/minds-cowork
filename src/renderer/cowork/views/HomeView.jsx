@@ -57,23 +57,10 @@ const SETTLE_MS    = 520;
 // 42px. No constants extracted because each value is referenced
 // exactly once.)
 
-// One-shot keyframe injection — adds the boot fade rule once per
-// page load, alongside the global `fadein-up` that already lives in
-// styles/globals.css. (The earlier caret-blink keyframe was dropped
-// when we removed the typewriter cursor in favour of letters
-// appearing letter-by-letter beside the idle orb.)
-let _BOOT_KEYFRAMES_INJECTED = false;
-function _ensureBootKeyframes() {
-  if (_BOOT_KEYFRAMES_INJECTED) return;
-  if (typeof document === 'undefined') return;
-  const style = document.createElement('style');
-  style.setAttribute('data-home-boot-keyframes', '');
-  style.textContent = `
-@keyframes boot-fadein { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: translateY(0) } }
-`;
-  document.head.appendChild(style);
-  _BOOT_KEYFRAMES_INJECTED = true;
-}
+// `boot-fadein` lives in globals.css alongside the global `fadein-up`
+// (and every other keyframe in the app). (The earlier caret-blink
+// keyframe was dropped when we removed the typewriter cursor in favour
+// of letters appearing letter-by-letter beside the idle orb.)
 
 function useBootPhase({ serverOnline, configReady, greeting, skipIntro = false }) {
   // Phases: loading → collapsing → traveling → morphing → typing →
@@ -196,12 +183,7 @@ function ActiveList({ tasks, onSelect, onClear }) {
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8, padding: '0 4px' }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--frost-700)', letterSpacing: '0.02em' }}>Active</div>
         <div style={{ flex: 1 }} />
-        <button
-          onClick={onClear}
-          style={{ border: 0, background: 'transparent', cursor: 'pointer', fontSize: 12, color: 'var(--frost-600)' }}
-          onMouseOver={(e) => (e.currentTarget.style.color = 'var(--text-strong)')}
-          onMouseOut={(e) => (e.currentTarget.style.color = 'var(--frost-600)')}
-        >Clear active</button>
+        <Button variant="subtle" onClick={onClear}>Clear active</Button>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         {tasks.map((t) => (
@@ -258,8 +240,6 @@ export default function HomeView({
   agentLabel,
   prefill = null,
 }) {
-  useEffect(() => { _ensureBootKeyframes(); }, []);
-
   const greetingText = greeting || GREETING_FALLBACK;
   const blocked = configReady === false;
 
@@ -505,27 +485,17 @@ export default function HomeView({
           animation: 'boot-fadein 500ms ease-out both',
         }}>
           {blocked ? (
-            <div style={{
-              width: '100%', maxWidth: 640,
-              background: 'var(--surface-0)',
-              border: '1px solid var(--border-01)',
-              borderRadius: 12,
-              boxShadow: 'var(--shadow-sm)',
-              padding: 18,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 14,
-            }}>
+            <div className="home-connect-card">
               <span style={{
                 width: 36, height: 36, borderRadius: 9,
                 display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                 background: 'var(--primary-50)', color: 'var(--primary-700)', flexShrink: 0,
               }}>{Ico.key(18)}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="home-connect-card__body">
                 <div style={{ fontSize: 14, fontWeight: 650, color: 'var(--text-strong)' }}>Connect a provider to start chatting</div>
                 <div style={{ fontSize: 12.5, color: 'var(--frost-700)', marginTop: 3 }}>Subscribe with MindsHub for managed access, or bring your own provider key (Anthropic, OpenAI, or any OpenAI-compatible endpoint) in Settings.</div>
               </div>
-              <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+              <div className="home-connect-card__actions">
                 <Button
                   variant="primary"
                   onClick={() => host.openExternal(MINDS_BILLING_URL)}

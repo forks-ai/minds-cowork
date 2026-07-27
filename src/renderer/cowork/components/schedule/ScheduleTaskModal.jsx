@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from 'react';
 import { Modal, ModalHeader, ModalBody, ModalFooter } from '../ui/Modal';
-import { Button } from '../ui';
+import { Button, Select } from '../ui';
 import Ico from '../Icons';
 
 const FONT_BODY = 'var(--font-body)';
@@ -41,13 +41,12 @@ const fieldInput = {
   outline: 'none',
 };
 
-// Native <select> elements paint their own chevron inside the right
-// padding area, so the same `padding: 10px` that's fine on a text
-// input feels cramped here — the chevron ends up flush with the
-// border. Bumping the right padding gives the indicator some air.
-const fieldSelect = {
-  ...fieldInput,
-  paddingRight: 28,
+// Selects sit alongside the surface-2 text inputs above, so the trigger
+// carries the same background/radius (Select's own default is the
+// bordered var(--surface) look used in bordered form fields elsewhere).
+const fieldSelectStyle = {
+  background: 'var(--surface-2)',
+  borderRadius: 7,
 };
 
 function Field({ label, children }) {
@@ -83,10 +82,10 @@ export default function ScheduleTaskModal({
     setConfirmingDelete(false);
     if (task) {
       // The server stores the project as a NAME (`task.project`) and
-      // the form's <select> uses path as its value. Hydrate the form
-      // by resolving the name back to a path via `projects`. Earlier
-      // versions read `task.projectPath` which the server never sets,
-      // so editing always lost the project association.
+      // the form's Project select uses path as its value. Hydrate the
+      // form by resolving the name back to a path via `projects`.
+      // Earlier versions read `task.projectPath` which the server never
+      // sets, so editing always lost the project association.
       const taskProjectPath = (() => {
         if (task.projectPath) return task.projectPath;
         if (task.project) {
@@ -197,17 +196,19 @@ export default function ScheduleTaskModal({
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Field label="Cadence">
-              <select
+              <Select
                 value={form.cadence}
-                onChange={(e) => update('cadence', e.target.value)}
-                style={fieldSelect}
-              >
-                <option value="once">Once</option>
-                <option value="hourly">Hourly</option>
-                <option value="daily">Daily</option>
-                <option value="weekdays">Weekdays</option>
-                <option value="weekly">Weekly</option>
-              </select>
+                onValueChange={(v) => update('cadence', v)}
+                ariaLabel="Cadence"
+                style={fieldSelectStyle}
+                options={[
+                  { value: 'once',     label: 'Once' },
+                  { value: 'hourly',   label: 'Hourly' },
+                  { value: 'daily',    label: 'Daily' },
+                  { value: 'weekdays', label: 'Weekdays' },
+                  { value: 'weekly',   label: 'Weekly' },
+                ]}
+              />
             </Field>
             <Field label="Next run">
               <input
@@ -221,16 +222,16 @@ export default function ScheduleTaskModal({
           </div>
 
           <Field label="Project">
-            <select
+            <Select
               value={form.projectPath}
-              onChange={(e) => update('projectPath', e.target.value)}
-              style={fieldSelect}
-            >
-              <option value="">No project</option>
-              {projects.map((p) => (
-                <option key={p.path} value={p.path}>{p.name}</option>
-              ))}
-            </select>
+              onValueChange={(v) => update('projectPath', v)}
+              ariaLabel="Project"
+              style={fieldSelectStyle}
+              options={[
+                { value: '', label: 'No project' },
+                ...projects.map((p) => ({ value: p.path, label: p.name })),
+              ]}
+            />
           </Field>
 
           <div>
@@ -274,41 +275,31 @@ export default function ScheduleTaskModal({
           confirmingDelete ? (
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 12.5, color: 'var(--ink-3)' }}>Delete this schedule?</span>
-              <button
-                type="button"
-                onClick={() => setConfirmingDelete(false)}
-                disabled={busy}
-                style={btnSecondary}
-              >Cancel</button>
-              <button
-                type="button"
-                onClick={handleDelete}
-                disabled={busy}
-                style={btnDanger}
-              >Delete</button>
+              <Button variant="subtle" onClick={() => setConfirmingDelete(false)} disabled={busy}>
+                Cancel
+              </Button>
+              <Button variant="danger-solid" onClick={handleDelete} disabled={busy}>
+                Delete
+              </Button>
             </div>
           ) : (
-            <button
-              type="button"
-              onClick={() => setConfirmingDelete(true)}
-              disabled={busy}
-              style={{ ...btnSecondary, color: 'var(--danger)' }}
-            >
+            <Button variant="danger" onClick={() => setConfirmingDelete(true)} disabled={busy}>
               {Ico.trash ? Ico.trash(13) : null}
-              <span style={{ marginLeft: Ico.trash ? 6 : 0 }}>Delete</span>
-            </button>
+              Delete
+            </Button>
           )
         )}
         {!isEdit && <span />}
         <div style={{ display: 'inline-flex', gap: 8 }}>
-          <button type="button" onClick={onClose} disabled={busy} style={btnSecondary}>
+          <Button variant="subtle" onClick={onClose} disabled={busy}>
             Cancel
-          </button>
+          </Button>
           <Button
             variant="primary"
             onClick={handleSubmit}
             disabled={busy}
           >
+            {!isEdit && !busy && Ico.plus(14)}
             {busy ? 'Saving…' : (isEdit ? 'Save changes' : 'Create')}
           </Button>
         </div>
@@ -330,23 +321,3 @@ function emptyForm({ defaultProjectPath }) {
     enabled: true,
   };
 }
-
-const btnSecondary = {
-  display: 'inline-flex', alignItems: 'center',
-  background: 'transparent',
-  border: '1px solid var(--line)',
-  color: 'var(--ink-2)',
-  padding: '7px 12px', borderRadius: 7,
-  fontFamily: FONT_BODY, fontSize: 12.5, fontWeight: 500,
-  cursor: 'pointer',
-};
-
-const btnDanger = {
-  display: 'inline-flex', alignItems: 'center',
-  background: 'var(--danger)',
-  border: '1px solid var(--danger)',
-  color: '#fff',
-  padding: '7px 12px', borderRadius: 7,
-  fontFamily: FONT_BODY, fontSize: 12.5, fontWeight: 500,
-  cursor: 'pointer',
-};

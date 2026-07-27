@@ -6,7 +6,7 @@ import * as https from 'https';
 import * as http from 'http';
 import { IPC } from '../shared/ipc-channels';
 import { checkInstallStatus, runInstaller } from './installer';
-import { startServer, stopServer, isServerRunning, isServerStarting, getServerPort, getServerDiagnostics, getServerLogPath, resolveServerPort, fetchServerVersions } from './server-process';
+import { startServer, stopServer, forceReapServer, isServerRunning, isServerStarting, getServerPort, getServerDiagnostics, getServerLogPath, resolveServerPort, fetchServerVersions } from './server-process';
 import { setUpdateNotifier, recreateVenvIfUnsupportedPython, repairServerInstall } from './server-updater';
 import { initUpdater, registerUpdateHandlers } from './updater';
 import { oauthConnect, cancelCurrentOAuth } from './oauth-service';
@@ -17,7 +17,7 @@ import { fetchAccountEmail } from './oauth-identity';
 import { openDrivePickerFlow, cancelCurrentDrivePicker, isValidDriveFileIds } from './drive-picker-service';
 import { getPickedFiles, savePickedFiles, verifyPickedFiles, type PickedFile } from './picked-files';
 import { saveTokens, getAccessToken, getRefreshToken, clearTokens, migrateRefreshTokenStore, isAccessTokenExpired } from './token-store';
-import { refreshTokensOnly, writeMindsKeyToEnvAndRestart, provisionAntonApiKey, scheduleRefresh, cancelScheduledRefresh, endKeycloakSession, KEYCLOAK_AUTH_URL, KEYCLOAK_TOKEN_URL } from './minds-auth';
+import { refreshTokensOnly, writeMindsKeyToEnvAndRestart, provisionAntonApiKey, scheduleRefresh, cancelScheduledRefresh, endKeycloakSession, KEYCLOAK_AUTH_URL, KEYCLOAK_REGISTRATION_URL, KEYCLOAK_TOKEN_URL, SIGNUP_CALLBACK_TIMEOUT_MS } from './minds-auth';
 import { MINDS_API_HOST } from './minds-urls';
 import { sendEvent } from './analytics';
 import { getRendererPath, getBundledPath, checkForUIUpdate, applyUIUpdate, hasInternet, getCachedVersion, isServingOta, rollbackUI } from './ui-updater';
@@ -68,7 +68,12 @@ function getDevMode(): string | null {
   return val; // 'live' or 'full'
 }
 
-/** Read UI_UPDATE_MODE from ~/.anton/.env. Defaults to 'auto'. */
+/** Read UI_UPDATE_MODE from ~/.anton/.env. Defaults to 'auto'.
+ *
+ * ENG-858: this is now an env-only escape hatch, not a user-facing setting —
+ * there is no Settings UI control for it. It exists for support (pin a user
+ * to manual if a bad version ships) and QA (version-pinning during testing);
+ * everyone else gets forced auto-apply at boot. */
 function getUpdateMode(): 'auto' | 'manual' {
   const vars = readEnvFile();
   return vars.UI_UPDATE_MODE === 'manual' ? 'manual' : 'auto';
@@ -834,29 +839,41 @@ function setupIPC() {
   // (for next-launch silent refresh); writing ~/.anton/.env is
   // deferred to `mindshub:finalize` (or to host.saveSettings on the
   // BYOK path).
-  ipcMain.handle(IPC.MINDSHUB_LOGIN, async () => {
-    // `anton-desktop` is the only Keycloak client in the dev realm
-    // that allows loopback (127.0.0.1) redirect URIs — `public-client`
-    // returns HTTP 400 for those. Pulling org context into the token
-    // is handled post-login by ensureActiveOrg() in minds-auth.ts.
+  // Shared by MINDSHUB_LOGIN and MINDSHUB_SIGNUP — the same loopback PKCE
+  // exchange against Keycloak; only the browser entry point (login vs
+  // registration form) and the callback patience differ. `anton-desktop`
+  // is the only Keycloak client in the realm that allows loopback
+  // (127.0.0.1) redirect URIs — `public-client` returns HTTP 400 for
+  // those. Pulling org context into the token is handled post-auth by
+  // ensureActiveOrg() in minds-auth.ts.
+  const runMindsAuthFlow = async (authUrl: string, callbackTimeoutMs?: number) => {
     const result = await oauthConnect({
       clientId: 'anton-desktop',
-      authUrl: KEYCLOAK_AUTH_URL,
+      authUrl,
       tokenUrl: KEYCLOAK_TOKEN_URL,
       scopes: ['openid', 'profile', 'email', 'organization', 'offline_access'],
+      callbackTimeoutMs,
     });
     if (result.ok && result.access_token) {
       if (!result.refresh_token) {
         // Session won't survive a restart without it — loud so a failing
         // machine's log explains the next-launch sign-out (ENG-761).
-        console.warn('[mindshub:login] Keycloak returned no refresh_token — session will not persist across restarts');
+        console.warn('[mindshub:auth] Keycloak returned no refresh_token — session will not persist across restarts');
       }
       saveTokens(result.access_token, result.expires_in ?? 3600, result.refresh_token ?? '');
       scheduleRefresh(result.expires_in ?? 3600);
       focusMainWindow();
     }
     return result;
-  });
+  };
+
+  ipcMain.handle(IPC.MINDSHUB_LOGIN, () => runMindsAuthFlow(KEYCLOAK_AUTH_URL));
+
+  // Sign-up (ENG-917): Keycloak's registration form, then the identical
+  // code exchange. The long callback window covers the VERIFY_EMAIL pause —
+  // the emailed link resumes the parked flow back to our loopback.
+  ipcMain.handle(IPC.MINDSHUB_SIGNUP, () =>
+    runMindsAuthFlow(KEYCLOAK_REGISTRATION_URL, SIGNUP_CALLBACK_TIMEOUT_MS));
 
   // Re-roll the access token using the stored refresh_token without
   // touching the env file. Used after Stripe checkout so the renderer
@@ -1524,7 +1541,7 @@ app.whenReady().then(async () => {
     // build may be exactly what fixes the crash — so the boot check must not be
     // gated behind a successful start. When the server is down, the poll
     // applies an available server update even in manual mode (recovery, not a
-    // routine update); a healthy server still honors the auto/manual setting.
+    // routine update); a healthy server still honors the auto/manual env hatch.
     // maybeUpdateServer rolls back automatically if the new version also fails
     // its health probe, so this can't strand a previously-working install.
     setUpdateNotifier((payload) => {
@@ -1607,14 +1624,28 @@ async function drainServerForQuit(): Promise<void> {
   // in-flight tick can call PATCH /token against a dead server.
   stopAllRefreshLoops();
   // Hard ceiling so a wedged python can't pin the quit indefinitely.
-  // stopServer's own SIGTERM(3s) + SIGKILL(1.5s) chain stays inside
+  // stopServer's own SIGTERM(6s) + SIGKILL(1.5s) chain stays inside
   // this window, but a misbehaving OS-level process delay could push
-  // past it; if so we'd rather quit and reparent the child to launchd
-  // than leave the user waiting on the dock icon.
-  await Promise.race([
-    stopServer(),
-    new Promise<void>((resolve) => setTimeout(resolve, 6_000)),
+  // past it; if so we'd rather quit than leave the user waiting on the
+  // dock icon. Both numbers end early the moment the child exits, so a
+  // healthy quit is still immediate.
+  const stopped = await Promise.race([
+    stopServer().then(() => true),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 8_000)),
   ]);
+
+  // stopServer lost the race. The usual reason is that a start still holds
+  // the lifecycle lock — a sidecar that is still importing can hold it for
+  // the whole start cap, far longer than this ceiling — so the polite stop
+  // never even ran. Quitting here would leave that python behind to bind the
+  // port unsupervised. Reap it directly, without the lock, still bounded.
+  if (!stopped) {
+    console.warn('[server] stop did not finish before the quit ceiling; force-reaping the sidecar');
+    await Promise.race([
+      forceReapServer(),
+      new Promise<void>((resolve) => setTimeout(resolve, 2_000)),
+    ]);
+  }
 }
 
 app.on('window-all-closed', async () => {

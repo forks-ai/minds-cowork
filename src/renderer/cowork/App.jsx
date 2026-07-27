@@ -10,6 +10,7 @@ import Sidebar from './components/Sidebar';
 import MobileShell from './components/MobileShell';
 import { ConfirmModal } from './components/ConfirmModal';
 import { Modal, ModalHeader, ModalBody } from './components/ui/Modal';
+import { ToastProvider, useToastManager } from './components/ui/Toast';
 import HomeView from './views/HomeView';
 import ChatView from './views/ChatView';
 import ProjectsView from './views/ProjectsView';
@@ -28,6 +29,7 @@ import ServerOfflineHelpModal from './components/ServerOfflineHelpModal';
 import { setForm as setDataVaultForm, getForm as getDataVaultForm, clearForm as clearDataVaultForm, patchForm as patchDataVaultForm, getFormState as getDataVaultFormState, setFormState as setDataVaultFormState, getSelectedMethod as getDataVaultSelectedMethod, setSelectedMethod as setDataVaultSelectedMethod, subscribe as subscribeDataVaultForm } from './components/datavault/formStore';
 import { extractFormSpec } from './components/datavault/parseFormSpec';
 import { host, getAccessToken } from '../platform/host';
+import { SERVER_START_CAP_MS } from '../../shared/server-status';
 import { loadSkin, persistSkin, nextSkin, skinLabel } from '../lib/skins';
 import { loadCustomTheme, persistCustomTheme, applyCustomTheme } from '../lib/customTheme';
 import { applyNavTitleColor } from '../lib/navBranding';
@@ -635,12 +637,13 @@ function mergeTasksFromServer(serverTasks, localTasks) {
   const local = Array.isArray(localTasks) ? localTasks : [];
   if (!Array.isArray(serverTasks)) return local;
   const localById = new Map(local.map((t) => [t.id, t]));
-  // Take whichever of (local, server) updatedAt is newer. A turn
-  // in flight has a fresh client stamp (handleSendInTask /
-  // handleSendFromHome) but a stale server stamp (server only
-  // bumps _meta.json on completion). Without this guard, a
-  // fetchSessions mid-stream would slide the just-revived task
-  // back down the list as soon as it lands.
+  // Take whichever of (local, server) updatedAt is newer. When a turn
+  // is in flight, handleSendInTask / handleSendFromHome stamp a fresh
+  // client updatedAt the instant the user sends, but the server's value
+  // only catches up once the turn's messages persist (the server derives
+  // updated_at from the latest message — ENG-961). Keeping the newer of
+  // the two stops a fetchSessions mid-stream from sliding the just-revived
+  // task back down the list before the server value lands.
   const _newerUpdatedAt = (a, b) => {
     const aa = Date.parse(a || '') || 0;
     const bb = Date.parse(b || '') || 0;
@@ -739,7 +742,11 @@ function nextPollDelay(schedules) {
 }
 
 export default function App() {
-  return <AppCore />;
+  return (
+    <ToastProvider>
+      <AppCore />
+    </ToastProvider>
+  );
 }
 
 function AppCore() {
@@ -786,7 +793,9 @@ function AppCore() {
   const [composerPrefill, setComposerPrefill] = useState(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState('agent');
+  // null = no section selected: the mobile master-detail shows its section
+  // list; desktop (no list) falls back to 'agent' where it's read.
+  const [settingsSection, setSettingsSection] = useState(null);
   const [ssoConnected, setSsoConnected] = useState(false);
   // Last sign-in failure, painted on the Settings account card. Cleared
   // on retry and on any authenticated push from main (ENG-761).
@@ -1087,13 +1096,14 @@ function AppCore() {
   // a TDZ ReferenceError at first render.
   // Composer model options for the active (planning) provider. Sourced from
   // the backend-overlaid recommendedModels map (single source of truth in
-  // cowork-server) — labels derived from ids, never hardcoded. Empty until
+  // cowork-server) — names come from MindsHub's own label for the model where
+  // it publishes one, else derived from the id, never hardcoded. Empty until
   // settings load; the composer then shows just the configured model.
   const models = useMemo(() => {
     const providerType = providerValueToType(settings.planningProvider) || 'minds-cloud';
-    return recommendedModelOptions(settings.recommendedModels, providerType)
+    return recommendedModelOptions(settings.recommendedModels, providerType, settings.modelLabels)
       .map((o) => ({ id: o.id, name: o.label, desc: '' }));
-  }, [settings.recommendedModels, settings.planningProvider]);
+  }, [settings.recommendedModels, settings.planningProvider, settings.modelLabels]);
   // The user's preferred collapsed state for the sidebar. Effective
   // collapsed-ness is derived below — we only honor this value while
   // viewing a chat task; every other surface (home, projects,
@@ -1331,7 +1341,7 @@ function AppCore() {
   // OTA UI update state
   const [updateStatus, setUpdateStatus] = useState(null); // { phase, version }
   const [updateApplying, setUpdateApplying] = useState(false);
-  const [refreshErrors, setRefreshErrors] = useState([]); // { engine, name, accountEmail, permanent }
+  const toastManager = useToastManager();
 
   // Load data from server on mount
   const refreshData = useCallback(() => {
@@ -1451,9 +1461,22 @@ function AppCore() {
   }, []);
 
   // Listen for background OAuth refresh failures pushed from main process.
+  // timeout: 0 — persists until the user manually dismisses it, same as
+  // the previous hand-rolled banner (these need action, not a fade-out).
   useEffect(() => {
     return host.onOAuthRefreshError((payload) => {
-      setRefreshErrors((prev) => [...prev, { ...payload, id: Date.now() }]);
+      toastManager.add({
+        type: payload.permanent ? 'danger' : 'warning',
+        timeout: 0,
+        title: (
+          <>
+            <strong>{payload.engine}</strong>
+            {payload.permanent
+              ? ' connection needs to be reconnected — refresh token expired.'
+              : ' connection refresh failed — retrying automatically.'}
+          </>
+        ),
+      });
     });
   }, []);
 
@@ -1511,6 +1534,9 @@ function AppCore() {
     if (host.isWeb) return;
     if (health.config_ready === false) {
       bootConfigRedirectFiredRef.current = true;
+      // Missing provider → land straight on the Agent (provider) section, on
+      // desktop and in the mobile master-detail alike.
+      setSettingsSection('agent');
       setSettingsOpen(true);
     }
   }, [serverOnline, health.config_ready]);
@@ -1566,41 +1592,42 @@ function AppCore() {
   // listening in the background.
   //
   // Fix: keep ticking until either `info.running` flips true OR a
-  // hard ceiling elapses (45s — same upper bound as `startServer`'s
-  // health-probe timeout). After the ceiling we stop and trust the
+  // hard ceiling elapses. After the ceiling we stop and trust the
   // status pill / sidebar toggle to recover by user action.
+  //
+  // The ceiling has to outlast main's start budget, or this loop declares
+  // the backend offline while main is still legitimately waiting for it —
+  // the user sees the failure panel for a start that goes on to succeed.
+  // Derived from the shared cap rather than a second hand-picked number so
+  // the two cannot drift apart.
   useEffect(() => {
     if (host.isWeb) return; // No server lifecycle to poll in the hosted web shell.
     let cancelled = false;
     let timer = null;
     const startedAt = Date.now();
-    const POLL_CEILING_MS = 45_000;
+    const POLL_CEILING_MS = SERVER_START_CAP_MS + 60_000;
 
+    // Exactly one timer per tick. An earlier version scheduled inside the
+    // starting/not-running branch AND again below it, overwriting `timer` and
+    // leaking the first — so the poll rate doubled every tick. A warm start
+    // resolved in two ticks and hid it; a slow start would have turned it into
+    // thousands of concurrent polls.
     const tick = async () => {
       try {
         const info = await host.serverInfo();
         if (cancelled || !info) return;
-        if (typeof info.running === 'boolean') setServerOnline(info.running);
         const running = info.running === true;
         const starting = info.starting === true;
-        if (starting) {
-          setServerBusyKind('starting');
-          setServerBusy(true);
-          timer = setTimeout(tick, 600);
-        } else if (!info.running) {
-          // Server isn't starting yet (e.g. checkInstallStatus still
-          // resolving) — keep polling so we catch it when it comes up.
-          setServerBusy(false);
-          timer = setTimeout(tick, 1000);
-        } else {
-          setServerBusy(false);
-        }
-        // Keep polling until we see `running=true`, OR until the
-        // ceiling elapses. Polling while `running=false` covers the
-        // window where main is still resolving `checkInstallStatus`
-        // before kicking off `startServer`.
-        if (!running && Date.now() - startedAt < POLL_CEILING_MS) {
-          timer = setTimeout(tick, 600);
+        if (typeof info.running === 'boolean') setServerOnline(running);
+        if (starting) setServerBusyKind('starting');
+        setServerBusy(starting);
+        if (running) return; // settled
+        // Keep polling while main says it's still starting (main owns the
+        // hard cap, so this can't run forever), and otherwise until the
+        // ceiling — which covers the window where main is still resolving
+        // `checkInstallStatus` before kicking off `startServer`.
+        if (starting || Date.now() - startedAt < POLL_CEILING_MS) {
+          timer = setTimeout(tick, starting ? 600 : 1000);
         }
       } catch {
         // Polling errors (IPC blip, restart) shouldn't kill the
@@ -2146,6 +2173,10 @@ function AppCore() {
       const fresh = await fetchDatasources();
       setConnectors(Array.isArray(fresh?.connections) ? fresh.connections : []);
     } catch { /* best-effort refresh */ }
+    // Project files' Context card holds its own Google Drive file list and
+    // has no other way to learn this connection (and its _picked_files
+    // grant) is gone — see the matching dispatch in CustomizeView.handleDelete.
+    window.dispatchEvent(new CustomEvent('anton:connections-changed'));
     setRoute('customize');
   };
   // Picker hands us a summary record (id + label + …). The user
@@ -2271,7 +2302,6 @@ function AppCore() {
     setComposerAttachments,
     setActiveTaskId,
     setRoute,
-    handleConnectorPicked,
   });
 
   // Keep the ref synced so the Cmd/Ctrl+N keydown handler always calls
@@ -2329,11 +2359,22 @@ function AppCore() {
     }
   };
 
+  // Open the Settings surface. A named section drills straight to it (desktop
+  // and the mobile master-detail alike). A bare open leaves desktop on its
+  // last section (it has no list) but resets the mobile surface to its section
+  // list — hence the isMobile-gated null. Single home for this rule so the
+  // call sites don't each re-spell it.
+  const openSettings = (section = null) => {
+    if (section) setSettingsSection(section);
+    else if (isMobile) setSettingsSection(null);
+    setSettingsOpen(true);
+  };
+
   const navigate = (key) => {
     if (key === 'settings' || key.startsWith('settings:')) {
-      const section = key.includes(':') ? key.split(':')[1] : null;
-      if (section) setSettingsSection(section);
-      setSettingsOpen(true);
+      // Targeted (settings:backend) opens that section; a bare `settings`
+      // opens the mobile section list (null) / desktop's last section.
+      openSettings(key.includes(':') ? key.split(':')[1] : null);
       return;
     }
     if (isNarrow) setMobileSidebarOpen(false);
@@ -3677,7 +3718,7 @@ function AppCore() {
           navLogo={settings.navLogo || null}
           updateAvailable={updateStatus?.phase === 'available' ? { version: updateStatus.version } : null}
           onApplyUpdate={handleApplyUpdate}
-          onShowServerHelp={() => { setSettingsSection('backend'); setSettingsOpen(true); }}
+          onShowServerHelp={() => openSettings('backend')}
           onToggleServer={async () => {
             if (serverBusy) return;
             // Decide intent from main's actual state, not renderer state.
@@ -3752,10 +3793,10 @@ function AppCore() {
             onCreateProject={(args) => handleCreateProject({ ...args, _inline: true })}
             configReady={health.config_ready ?? settings.configReady}
             configError={health.config_error ?? settings.configError}
-            onOpenSettings={(section) => { if (section) setSettingsSection(section); setSettingsOpen(true); }}
+            onOpenSettings={openSettings}
             serverOnline={serverOnline}
             agentLabel={agentLabel}
-            onShowServerHelp={() => { setSettingsSection('backend'); setSettingsOpen(true); }}
+            onShowServerHelp={() => openSettings('backend')}
             skipIntro={bootIntroDone}
             prefill={composerPrefill}
           />
@@ -3765,7 +3806,7 @@ function AppCore() {
           <ChatView
             task={currentTask}
             onSend={handleSendInTask}
-            onOpenSettings={(section) => { if (section) setSettingsSection(section); setSettingsOpen(true); }}
+            onOpenSettings={openSettings}
             queuedMessages={messageQueue[currentTask?.id] || []}
             onRemoveFromQueue={(itemId) => removeFromQueue(currentTask?.id, itemId)}
             onBack={() => {
@@ -3964,7 +4005,7 @@ function AppCore() {
             connectors={connectors}
             onConnectionsSynced={(next) =>
               setConnectors(Array.isArray(next) ? next : [])}
-            onOpenSettings={(section) => { if (section) setSettingsSection(section); setSettingsOpen(true); }}
+            onOpenSettings={openSettings}
             onConnectNew={handleStartConnectChat}
             onReconnect={(spec) => handleConnectorPicked(spec)}
             agentLabel={agentLabel}
@@ -3972,33 +4013,22 @@ function AppCore() {
         )}
 
         {/* Settings modal — rendered over whatever route is active */}
-        <Modal open={settingsOpen} onClose={() => setSettingsOpen(false)} size="lg" height="min(820px, 88vh)" labelledBy="settings-modal-title">
-          <ModalHeader
-            id="settings-modal-title"
-            title="Settings"
+        {/* Mobile (ENG-990): Settings is a full page with accordion nav, not
+            a modal. Gated on isMobile; desktop keeps the two-column modal. */}
+        {isMobile ? (
+          // Full-page master-detail surface. A fullBleed Modal (Base UI dialog)
+          // brings the focus trap + restore, scroll lock, and Esc dismissal a
+          // hand-rolled <div> can't; SettingsView owns its top bar (contextual
+          // back / title) and scroll body. onClose closes it from the list.
+          <Modal
+            open={settingsOpen}
             onClose={() => setSettingsOpen(false)}
-            right={!ssoConnected && host.isElectron ? (
-              <button
-                type="button"
-                onClick={async () => { setSettingsOpen(false); await handleSsoSignIn(); }}
-                title="Sign in with MindsHub to use managed models"
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 6,
-                  padding: '5px 11px', borderRadius: 7,
-                  border: '1px solid var(--border-subtle)',
-                  background: 'transparent',
-                  color: 'var(--ink-3)',
-                  fontFamily: 'var(--font-body)', fontSize: 12.5,
-                  cursor: 'pointer', flexShrink: 0,
-                  transition: 'background 120ms ease, color 120ms ease, border-color 120ms ease',
-                }}
-                onMouseOver={(e) => { e.currentTarget.style.background = 'var(--surface-2)'; e.currentTarget.style.color = 'var(--ink)'; }}
-                onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--ink-3)'; }}
-              >Sign in</button>
-            ) : undefined}
-          />
-          <ModalBody padding="0" style={{ overflowY: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            fullBleed
+            labelledBy="settings-mobile-title"
+          >
             <SettingsView
+              mobile
+              onClose={() => setSettingsOpen(false)}
               settings={settings} setSetting={setSetting} onSave={saveSettings}
               theme={theme} onThemeChange={setTheme}
               skin={skin} onSkinChange={setSkin}
@@ -4015,8 +4045,54 @@ function AppCore() {
               ssoError={ssoError}
               onSsoSignIn={!ssoConnected && host.isElectron ? async () => { setSettingsOpen(false); await handleSsoSignIn(); } : undefined}
             />
-          </ModalBody>
-        </Modal>
+          </Modal>
+        ) : (
+          <Modal open={settingsOpen} onClose={() => setSettingsOpen(false)} size="lg" height="min(820px, 88vh)" labelledBy="settings-modal-title">
+            <ModalHeader
+              id="settings-modal-title"
+              title="Settings"
+              onClose={() => setSettingsOpen(false)}
+              right={!ssoConnected && host.isElectron ? (
+                <button
+                  type="button"
+                  onClick={async () => { setSettingsOpen(false); await handleSsoSignIn(); }}
+                  title="Sign in with MindsHub to use managed models"
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    padding: '5px 11px', borderRadius: 7,
+                    border: '1px solid var(--border-subtle)',
+                    background: 'transparent',
+                    color: 'var(--ink-3)',
+                    fontFamily: 'var(--font-body)', fontSize: 12.5,
+                    cursor: 'pointer', flexShrink: 0,
+                    transition: 'background 120ms ease, color 120ms ease, border-color 120ms ease',
+                  }}
+                  onMouseOver={(e) => { e.currentTarget.style.background = 'var(--surface-2)'; e.currentTarget.style.color = 'var(--ink)'; }}
+                  onMouseOut={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--ink-3)'; }}
+                >Sign in</button>
+              ) : undefined}
+            />
+            <ModalBody padding="0" style={{ overflowY: 'hidden', display: 'flex', flexDirection: 'column' }}>
+              <SettingsView
+                settings={settings} setSetting={setSetting} onSave={saveSettings}
+                theme={theme} onThemeChange={setTheme}
+                skin={skin} onSkinChange={setSkin}
+                customTheme={customTheme} onCustomThemeChange={setCustomTheme}
+                agentLabel={agentLabel}
+                section={settingsSection || 'agent'}
+                onSectionChange={setSettingsSection}
+                serverOnline={serverOnline}
+                serverBusy={serverBusy}
+                serverBusyKind={serverBusyKind}
+                onStartServer={handleServerStart}
+                onStopServer={handleServerStop}
+                isSsoConnected={ssoConnected}
+                ssoError={ssoError}
+                onSsoSignIn={!ssoConnected && host.isElectron ? async () => { setSettingsOpen(false); await handleSsoSignIn(); } : undefined}
+              />
+            </ModalBody>
+          </Modal>
+        )}
 
         {/* Legacy 'connect' kind removed — Connect Apps and Data is now
             the canonical surface for connector management (route
@@ -4220,34 +4296,6 @@ function AppCore() {
           </div>
         </ModalBody>
       </Modal>
-
-      {/* OAuth refresh-error toasts — shown when background token refresh fails */}
-      {refreshErrors.length > 0 && (
-        <div style={{ position: 'fixed', bottom: 20, right: 20, zIndex: 9000, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 340 }}>
-          {refreshErrors.map((err) => (
-            <div key={err.id} style={{
-              padding: '10px 14px', borderRadius: 8,
-              background: 'var(--surface)',
-              border: `1px solid ${err.permanent ? 'color-mix(in srgb, var(--danger) 40%, transparent)' : 'color-mix(in srgb, var(--warning, #f5a623) 40%, transparent)'}`,
-              boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
-              fontSize: 13, color: 'var(--ink)',
-              display: 'flex', alignItems: 'flex-start', gap: 10,
-            }}>
-              <div style={{ flex: 1, lineHeight: 1.5 }}>
-                {err.permanent
-                  ? <><strong>{err.engine}</strong> connection needs to be reconnected — refresh token expired.</>
-                  : <><strong>{err.engine}</strong> connection refresh failed — retrying automatically.</>}
-              </div>
-              <button
-                type="button"
-                onClick={() => setRefreshErrors((prev) => prev.filter((e) => e.id !== err.id))}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--ink-4)', padding: 0, fontSize: 16, lineHeight: 1, flexShrink: 0 }}
-                aria-label="Dismiss"
-              >×</button>
-            </div>
-          ))}
-        </div>
-      )}
 
       {/* OTA update overlay — shown during auto-update download/reload */}
       {(updateStatus?.phase === 'downloading' || updateStatus?.phase === 'reloading') && (
