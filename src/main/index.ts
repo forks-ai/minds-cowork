@@ -1,3 +1,6 @@
+// MUST be first: sets the per-channel Electron app name (→ userData dir) before
+// any module that reads app.getPath('userData') at load time (e.g. token-store).
+import './app-identity';
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, net, powerMonitor, session, shell } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -23,7 +26,10 @@ import { MINDS_API_HOST } from './minds-urls';
 import { sendEvent } from './analytics';
 import { getRendererPath, getBundledPath, checkForUIUpdate, applyUIUpdate, hasInternet, getCachedVersion, isServingOta, rollbackUI } from './ui-updater';
 import type { UpdateCheckResult } from './ui-updater';
-import { coworkHome, coworkEnvPath, coworkStatePath, migrateLegacyHome, readEnvFile } from './cowork-home';
+import { coworkHome, coworkEnvPath, coworkStatePath, migrateLegacyHome, readEnvFile, buildKind } from './cowork-home';
+import { checkChannelConsistency } from './channels';
+import { resolveChannelIconPath } from './app-icon';
+import { applyChannelUvIsolation } from './uv-paths';
 import { getServerAuthToken, authHeader, resetServerAuthTokenCache } from './server-auth';
 import { getAppDisplayVersion } from './server-source';
 import { extractProviderError, classifyOpenAICompatibleResult } from './provider-error';
@@ -57,7 +63,8 @@ function clearStoredProviderState(): void {
   }
 }
 
-/** Read DEV_MODE from ~/.anton/.env. Returns 'live', 'full', or null.
+/** Read DEV_MODE from the Cowork config home's .env (coworkEnvPath()).
+ *  Returns 'live', 'full', or null.
  *
  * Defaults to null (OTA enabled). Set `DEV_MODE=live` for the Vite
  * dev-server flow, `DEV_MODE=full` to force the bundled renderer
@@ -70,7 +77,7 @@ function getDevMode(): string | null {
   return val; // 'live' or 'full'
 }
 
-/** Read UI_UPDATE_MODE from ~/.anton/.env. Defaults to 'auto'.
+/** Read UI_UPDATE_MODE from the Cowork config home's .env. Defaults to 'auto'.
  *
  * ENG-858: this is now an env-only escape hatch, not a user-facing setting —
  * there is no Settings UI control for it. It exists for support (pin a user
@@ -287,11 +294,14 @@ function ensureDefaultProject() {
 }
 
 // ─── Icons ───────────────────────────────────────────────────
+// Channel-aware: non-prod builds show their badged icon (icon-<kind>.png) in the
+// window/dock/taskbar, not the prod icon. Selection logic (+ fallback) lives in
+// app-icon.ts so it's unit-tested; here we only resolve the assets dir.
 function getIconPath(): string {
-  if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'assets', 'icon.png');
-  }
-  return path.join(__dirname, '..', '..', '..', 'assets', 'icon.png');
+  const assetsDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'assets')
+    : path.join(__dirname, '..', '..', '..', 'assets');
+  return resolveChannelIconPath(buildKind(), assetsDir, fs.existsSync);
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -359,8 +369,13 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    minWidth: 800,
-    minHeight: 500,
+    // 640 is the floor of the tablet popout band (see lib/breakpoints.js):
+    // it lets the window shrink far enough to reveal the off-canvas sidebar
+    // popout, but never into the phone layout (< 640), whose MobileShell top
+    // bar would collide with the embedded traffic lights. The web build has
+    // no minimum and no traffic lights, so it keeps the phone layout safely.
+    minWidth: 640,
+    minHeight: 440,
     icon,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     // Embed the macOS traffic lights inside the sidebar header. Coordinates
@@ -1283,6 +1298,30 @@ app.whenReady().then(async () => {
     if (getRefreshToken() && isAccessTokenExpired()) void refreshTokensOnly();
   });
 
+  // Isolate this channel's uv tool install (cowork-server binary + venv) so
+  // build kinds on one machine don't share one binary. Must run before the
+  // installer's presence check and before the server starts.
+  applyChannelUvIsolation();
+
+  // Guard the two environment axes against silent disagreement: the build kind
+  // (data home / branch) must target the API host the canonical channel model
+  // says it should. A mismatch means a build was wired to talk to the wrong
+  // backend (e.g. a preview build pointed at the prod API) — log it loudly
+  // rather than let it write to the wrong environment unnoticed.
+  {
+    const c = checkChannelConsistency(buildKind(), MINDS_API_HOST);
+    if (!c.ok) {
+      console.warn(
+        `[channels] BUILD/ENV MISMATCH: build kind "${c.kind}" expects the ` +
+          `"${c.expectedSlug || 'prod'}" backend (${c.expectedApiHost}) but this build ` +
+          `points at "${c.actualSlug || 'prod'}" (${c.actualApiHost}). ` +
+          `Check the CI minds_api_url / build_kind inputs.`,
+      );
+    } else {
+      console.log(`[channels] build kind "${c.kind}" → ${c.actualApiHost} (consistent)`);
+    }
+  }
+
   // Purge any plaintext API keys older builds cached to disk (ENG-462).
   // Fire-and-forget: version-gated + idempotent, and current responses send
   // no-store so nothing new re-caches while this runs.
@@ -1316,7 +1355,7 @@ app.whenReady().then(async () => {
             {
               label: 'About MindsHub Cowork',
               click: async () => {
-                // Unified headline = ISO week of the newest hot-updated
+                // Unified headline = release week of the newest hot-updated
                 // component (UI + server + agent); the App shell is shown
                 // separately since it updates via a different channel.
                 // Per-component versions go in credits as a lightweight
