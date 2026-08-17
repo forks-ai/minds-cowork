@@ -27,4 +27,5 @@ src/main/app-version.gen.txt
 # build-macos-pkg.yml writes the first, packaged by `pkgbuild --scripts`;
 # build-windows-installer.yml writes the second, packaged by extraResources.
 build/pkg-scripts/server-credentials.json
-/server-credentials.json
+src/main/updater-version.gen.txt
+build/app-update.yml

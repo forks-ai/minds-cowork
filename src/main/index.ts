@@ -12,6 +12,7 @@ import { checkInstallStatus, runInstaller } from './installer';
 import { startServer, stopServer, forceReapServer, isServerRunning, isServerStarting, getServerPort, getServerDiagnostics, getServerLogPath, resolveServerPort, fetchServerVersions } from './server-process';
 import { setUpdateNotifier, recreateVenvIfUnsupportedPython, repairServerInstall } from './server-updater';
 import { initUpdater, registerUpdateHandlers } from './updater';
+import { awaitUpdateMaintenanceIdle } from './update-maintenance';
 import { oauthConnect, cancelCurrentOAuth } from './oauth-service';
 import { setRefreshToken, deleteRefreshToken, getRefreshToken as getOAuthRefreshToken } from './keychain-service';
 import { OAUTH_CREDENTIALS } from './credentials';
@@ -20,16 +21,17 @@ import { fetchAccountEmail } from './oauth-identity';
 import { openDrivePickerFlow, cancelCurrentDrivePicker, isValidDriveFileIds } from './drive-picker-service';
 import { getPickedFiles, savePickedFiles, verifyPickedFiles, type PickedFile } from './picked-files';
 import { saveTokens, getAccessToken, getRefreshToken, clearTokens, migrateRefreshTokenStore, isAccessTokenExpired } from './token-store';
-import { refreshTokensOnly, writeMindsKeyToEnvAndRestart, provisionAntonApiKey, scheduleRefresh, cancelScheduledRefresh, endKeycloakSession, KEYCLOAK_AUTH_URL, KEYCLOAK_REGISTRATION_URL, KEYCLOAK_TOKEN_URL, SIGNUP_CALLBACK_TIMEOUT_MS } from './minds-auth';
+import { refreshTokensOnly, writeMindsKeyToEnvAndRestart, provisionAntonApiKey, scheduleRefresh, cancelScheduledRefresh, startKeyLifecycleChecks, cancelKeyLifecycleChecks, revokeDeviceKeyAndEndSession, getRevokeToken, KEYCLOAK_AUTH_URL, KEYCLOAK_REGISTRATION_URL, KEYCLOAK_TOKEN_URL, SIGNUP_CALLBACK_TIMEOUT_MS } from './minds-auth';
 import { scrubEnvCredentials } from './logout-env';
 import { MINDS_API_HOST } from './minds-urls';
 import { sendEvent } from './analytics';
 import { getRendererPath, getBundledPath, checkForUIUpdate, applyUIUpdate, hasInternet, getCachedVersion, isServingOta, rollbackUI } from './ui-updater';
 import type { UpdateCheckResult } from './ui-updater';
-import { coworkHome, coworkEnvPath, coworkStatePath, migrateLegacyHome, readEnvFile, buildKind } from './cowork-home';
+import { coworkHome, coworkEnvPath, coworkStatePath, migrateLegacyHome, readEnvFile, buildKind, buildKindStrict } from './cowork-home';
 import { checkChannelConsistency } from './channels';
 import { resolveChannelIconPath } from './app-icon';
-import { applyChannelUvIsolation } from './uv-paths';
+import { applyChannelUvIsolation, primeLoginShellPath } from './uv-paths';
+import { shellAutoUpdateEnabledFor } from './shell-auto-update-rollout';
 import { getServerAuthToken, authHeader, resetServerAuthTokenCache } from './server-auth';
 import { getAppDisplayVersion } from './server-source';
 import { extractProviderError, classifyOpenAICompatibleResult } from './provider-error';
@@ -86,6 +88,12 @@ function getDevMode(): string | null {
 function getUpdateMode(): 'auto' | 'manual' {
   const vars = readEnvFile();
   return vars.UI_UPDATE_MODE === 'manual' ? 'manual' : 'auto';
+}
+
+/** Stable-first ENG-850 rollout with an environment kill switch. */
+function shellAutoUpdateEnabled(): boolean {
+  const vars = readEnvFile();
+  return shellAutoUpdateEnabledFor(buildKindStrict(), vars.SHELL_AUTO_UPDATE_ENABLED);
 }
 
 // Resolves once the boot-time server start has settled (server up, or
@@ -923,6 +931,9 @@ function setupIPC() {
       console.error('[mindshub:finalize] writeMindsKeyToEnvAndRestart failed:', err);
       return { ok: false, reason: `Failed to save MindsHub credentials: ${err?.message || err}` };
     }
+    // ENG-498: (re)arm the key lifecycle watch for this fresh sign-in —
+    // logout cancels it, and boot only starts it when already signed in.
+    startKeyLifecycleChecks();
     return { ok: true, apiKey: result.key };
   });
 
@@ -953,16 +964,26 @@ function setupIPC() {
     // ANTON_TERMS_CONSENT (the user already agreed) and non-credential
     // preferences (memory mode, theme, etc.).
     //
-    // SSO end-session is fire-and-forget — endKeycloakSession reads
-    // the refresh token before this returns, so it has what it needs
-    // even though we drop the local copy in the next line. We must
-    // NOT await it: when the dev Keycloak hangs (which has happened),
-    // a synchronous await freezes the whole logout, leaving the
-    // confirm modal stuck on "Signing out…" because the renderer is
-    // waiting on this IPC. The end-session call has its own 3s
-    // timeout regardless, so worst case it tidies up in background.
-    endKeycloakSession();
+    // We must NOT await the chain below: when the dev Keycloak hangs
+    // (which has happened), a synchronous await freezes the whole
+    // logout, leaving the confirm modal stuck on "Signing out…"
+    // because the renderer is waiting on this IPC.
+    //
+    // ENG-498: revoke THIS device's key while the session is still valid,
+    // then end the Keycloak session — one detached chain (see
+    // revokeDeviceKeyAndEndSession for the ordering rationale). Tokens are
+    // snapshotted here because clearTokens() below wipes them; the token
+    // fetch is bounded (~5s) so a dead IdP can't stall sign-out, in which
+    // case the key simply falls to the server-side TTL.
+    const revokeAccessToken = await getRevokeToken();
+    // Read the refresh token only AFTER the exchange above settles: a
+    // refresh inside getRevokeToken may ROTATE the persisted refresh token
+    // (see its NOTE), and reading earlier would hand end-session a
+    // superseded token.
+    const logoutRefreshToken = getRefreshToken();
+    void revokeDeviceKeyAndEndSession(revokeAccessToken, logoutRefreshToken);
     cancelScheduledRefresh();
+    cancelKeyLifecycleChecks();
     // Tear down any sign-in still waiting on its browser tab. Without
     // this, the loopback server stays armed for up to 3 minutes and
     // completing that stale tab silently signs the user back in after
@@ -1249,6 +1270,10 @@ function setupIPC() {
       app: getAppDisplayVersion(),
       ui: uiVersion,
       source: uiVersion ? 'ota' : 'bundled',
+      // Which update ring this install is on — staging-ring builds
+      // (preview/stable) legitimately run rc server versions, and without
+      // this in the About panel such reports look like corruption.
+      buildKind: buildKind(),
     };
   });
 
@@ -1474,6 +1499,9 @@ app.whenReady().then(async () => {
   // checkConfigured() can await the real readiness without polling.
   let resolveBootServer: () => void = () => {};
   bootServerSettled = new Promise<void>((resolve) => { resolveBootServer = resolve; });
+  // Bounded by primeLoginShellPath()'s own timeout — checkInstallStatus and
+  // the server spawn below both resolve uv through the PATH it caches.
+  await primeLoginShellPath();
   checkInstallStatus().then(async ({ antonInstalled }) => {
     if (!antonInstalled) {
       console.log('[server] skipped: cowork-server not installed; setup screen will handle.');
@@ -1550,6 +1578,12 @@ app.whenReady().then(async () => {
     } else {
       console.error(`[server] start failed: ${result.reason}`);
     }
+    // ENG-498: watch this device's MindsHub key and renew it ahead of its
+    // TTL deadline. Armed even when the boot start failed: the check itself
+    // no-ops until the server is running/starting, so a sidecar the user
+    // starts manually later still gets its daily renewal ticks instead of
+    // staying disarmed until the next app launch.
+    startKeyLifecycleChecks();
     // A constrained OTA cache that booted bundled (fail-closed) is re-verified
     // and, if compatible, swapped in by the updater's boot check after the
     // server-update pass — see settleConstrainedCache in updater.ts.
@@ -1568,7 +1602,7 @@ app.whenReady().then(async () => {
 
     const devMode = getDevMode();
     if (app.isPackaged && !devMode && mainWindow) {
-      initUpdater(() => mainWindow, rendererReady, getUpdateMode);
+      initUpdater(() => mainWindow, rendererReady, getUpdateMode, shellAutoUpdateEnabled());
     } else if (!app.isPackaged) {
       console.log('[updater] skipped — not a packaged build');
     } else if (devMode) {
@@ -1641,6 +1675,22 @@ async function drainServerForQuit(): Promise<void> {
   // Stop all OAuth refresh loops before the server shuts down so no
   // in-flight tick can call PATCH /token against a dead server.
   stopAllRefreshLoops();
+  // An auto-mode shell update installs itself as the app goes down, outside
+  // the update-maintenance gate that the in-app "Restart now" install enters.
+  // The download only stages the payload (Windows: the NSIS installer on disk;
+  // macOS: Squirrel.Mac fetches it into ShipIt's area) — the bundle swap runs
+  // later: on Windows in electron-updater's `app.once('quit')` handler, on
+  // macOS via ShipIt once this process terminates. Both are strictly after this
+  // before-quit drain, so waiting for any in-flight UI/server apply to finish
+  // here keeps the installer's file swap from overlapping it. Bounded like the
+  // server stop below so a wedged apply can't pin the quit indefinitely.
+  const applyDrained = await Promise.race([
+    awaitUpdateMaintenanceIdle().then(() => true),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 8_000)),
+  ]);
+  if (!applyDrained) {
+    console.warn('[updater] update-maintenance did not drain before the quit ceiling; an on-quit shell install may overlap an in-flight apply');
+  }
   // Hard ceiling so a wedged python can't pin the quit indefinitely.
   // stopServer's own SIGTERM(6s) + SIGKILL(1.5s) chain stays inside
   // this window, but a misbehaving OS-level process delay could push

@@ -152,6 +152,18 @@ function _failedEventMeta(events) {
     reconnectable: ev.reconnectable ?? null,
     providerLabel: ev.provider_label ?? null,
     failedModel: ev.model ?? null,
+    // ENG-1537 — see App.jsx's failedEventMeta; the two paths must agree.
+    retryAfter: typeof ev.retry_after === 'number' ? ev.retry_after : null,
+    // included_allowance_exhausted: when the free grant refreshes, as the
+    // gate's opaque ISO string. Formatted at render time — the server
+    // deliberately doesn't parse it, since only the client knows the
+    // viewer's timezone (ENG-1537).
+    resetAt: typeof ev.reset_at === 'string' ? ev.reset_at : null,
+    // Absolute instant to gate Retry against. The message's own created_at
+    // is NOT a substitute: the server serialises it offset-less, so JS reads
+    // it as local time — the gate would last hours west of UTC and no-op east
+    // of it, invisible to a TZ=UTC suite (ENG-1537 review).
+    retryAt: typeof ev.retry_at === 'string' ? ev.retry_at : null,
   };
 }
 
@@ -197,6 +209,9 @@ function _hydrateAssistantEvents(messages) {
           code: failed?.code || null,
           reconnectable: failed?.reconnectable ?? null,
           providerLabel: failed?.providerLabel ?? null,
+          retryAfter: failed?.retryAfter ?? null,
+          resetAt: failed?.resetAt ?? null,
+          retryAt: failed?.retryAt ?? null,
           failedModel: failed?.failedModel ?? null,
         });
       }
@@ -650,6 +665,34 @@ export async function cancelResponse(conversationId) {
     // 404 / network blip — treat as "already done." The local-state
     // teardown in handleStopStream is the user-visible part anyway.
     return { cancelled: false, conversation_id: conversationId };
+  }
+}
+
+/**
+ * Deliver the user's answer to a question a turn is blocked on.
+ *
+ * Callers must distinguish outcomes, so unlike cancelResponse this does not
+ * swallow failures: 404 means the question is gone (the card should become
+ * inert and the composer should stop redirecting), 409 means somebody else
+ * already answered.
+ */
+export async function submitAnswer(conversationId, questionId, answer) {
+  if (!conversationId || !questionId) return { status: 'not_found' };
+  try {
+    return await req('/responses/answer', {
+      method: 'POST',
+      body: JSON.stringify({
+        conversation_id: conversationId,
+        question_id: questionId,
+        ...answer,
+      }),
+    });
+  } catch (err) {
+    const status = err?.status;
+    if (status === 404) return { status: 'not_found' };
+    if (status === 409) return { status: 'already_answered' };
+    if (status === 400) return { status: 'rejected' };
+    return { status: 'error' };
   }
 }
 
@@ -1338,6 +1381,17 @@ export async function pollConnectorOAuth(state) {
 
 export async function fetchPublishable() {
   return req('/publish');
+}
+
+export async function discoverPostHogProjects({ personalApiKey, host, customHost }) {
+  return req('/connectors/posthog/projects', {
+    method: 'POST',
+    body: JSON.stringify({
+      personal_api_key: personalApiKey,
+      host,
+      custom_host: customHost || null,
+    }),
+  });
 }
 
 // Submit a data-vault form and stream the cowork agent's response.

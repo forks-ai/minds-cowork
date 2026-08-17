@@ -10,10 +10,17 @@ import { checkForUIUpdate, applyUIUpdate, getRendererPath, hasInternet, rollback
 import type { UpdateCheckResult } from './ui-updater';
 import { checkForServerUpdate, maybeUpdateServer } from './server-updater';
 import { isServerRunning } from './server-process';
-import { decideUpdateApply, summarizeUpdateCheck, shellUpdateIsNewer, shellDownloadUrl } from './update-logic';
+import { decideUpdateApply, summarizeUpdateCheck, shellUpdateIsNewer, shellDownloadUrl, shellAutoUpdateIsActive } from './update-logic';
 import type { UpdateCheckSummary } from '../shared/update-types';
 import { buildKindStrict } from './cowork-home';
 import { getAppDisplayVersion } from './server-source';
+import {
+  checkShellAutoUpdate,
+  configureShellAutoUpdate,
+  registerShellAutoUpdateHandlers,
+  startShellAutoUpdatePolling,
+} from './shell-auto-update-runtime';
+import { withUpdateMaintenance } from './update-maintenance';
 
 const UPDATE_POLL_MS = 4 * 60 * 60 * 1000; // 4 hours
 // How long a freshly-activated UI bundle has to finish loading before we treat
@@ -124,7 +131,7 @@ async function reloadWithUiHealthCheck(getWindow: GetWindow): Promise<void> {
 // Apply server (if requested) then UI, and reload if either landed. Shared by
 // the manual IPC apply and the boot/periodic poll. Args are "apply this",
 // already resolved against update mode + server health by the caller.
-async function applyUpdates(getWindow: GetWindow, applyServer: boolean, applyUi: boolean): Promise<boolean> {
+async function applyUpdatesUnlocked(getWindow: GetWindow, applyServer: boolean, applyUi: boolean): Promise<boolean> {
   const serverOk = applyServer ? await applyServerUpdate() : true;
   // Never activate a UI bundle on top of a server update that failed (and thus
   // rolled back to the old server) — the tandem coupling only holds when the
@@ -141,20 +148,35 @@ async function applyUpdates(getWindow: GetWindow, applyServer: boolean, applyUi:
   return uiApplied || (applyServer && serverOk);
 }
 
+function applyUpdates(getWindow: GetWindow, applyServer: boolean, applyUi: boolean): Promise<boolean> {
+  return withUpdateMaintenance(() => applyUpdatesUnlocked(getWindow, applyServer, applyUi));
+}
+
 // Detection only. Each channel reports its own errors so a confirmed update can
 // still win when another channel is inconclusive.
 export async function checkForUpdates(): Promise<UpdateCheckSummary> {
-  const [ui, server, shell] = await Promise.all([
+  const [ui, server, shell, shellAuto] = await Promise.all([
     checkForUIUpdate(),
     checkForServerUpdate(),
     checkForShellUpdate().catch(() => ({ available: false as const })),
+    // The stateful shell updater owns background download/install. This call
+    // coalesces the user's manual trigger with any boot/periodic check already
+    // in flight; its snapshot is folded into the summary below so a manual
+    // check can't report "up to date" while it is downloading or ready.
+    checkShellAutoUpdate('manual').catch(() => undefined),
   ]);
+  // On stable the legacy prod-only checkForShellUpdate() always reports nothing,
+  // so the auto-updater is the only signal that a shell update is in flight.
+  const shellAutoActive = !!shellAuto && shellAutoUpdateIsActive(shellAuto.phase);
   return summarizeUpdateCheck({
     ui: { updateAvailable: ui.updateAvailable, newVersion: ui.newVersion, error: ui.error },
-    server: { updateAvailable: server.updateAvailable, latestVersion: server.latestVersion, error: server.error },
+    // A pending stream repair is boot-only; the manual check must not offer it.
+    server: { updateAvailable: server.updateAvailable && !server.repair, latestVersion: server.latestVersion, error: server.error, component: server.component },
     shell: shell.available
       ? { updateAvailable: true, version: shell.latestVersion, downloadUrl: shell.downloadUrl ?? undefined }
-      : { updateAvailable: false },
+      : shellAutoActive
+        ? { updateAvailable: true, version: shellAuto?.targetVersion }
+        : { updateAvailable: false },
   });
 }
 
@@ -166,9 +188,12 @@ export function registerUpdateHandlers(getWindow: GetWindow) {
   ipcMain.handle(IPC.UI_SHELL_UPDATE_GET, () => lastShellStatus);
   ipcMain.handle(IPC.UI_UPDATE_APPLY, async () => {
     // A manual apply always re-checks the server so it can't drift from the UI.
+    // A pending stream repair is excluded: it applies at boot, and a user
+    // restarting for a UI update must not trigger a server downgrade.
     const server = await checkForServerUpdate();
-    return applyUpdates(getWindow, server.updateAvailable, true);
+    return applyUpdates(getWindow, server.updateAvailable && !server.repair, true);
   });
+  registerShellAutoUpdateHandlers();
 }
 
 // After the boot poll (server now current), re-verify a constrained OTA cache
@@ -217,7 +242,15 @@ export function initUpdater(
   getWindow: GetWindow,
   rendererReady: Promise<void>,
   getMode: () => 'auto' | 'manual',
+  shellAutoUpdateEnabled = false,
 ) {
+  configureShellAutoUpdate({
+    enabled: shellAutoUpdateEnabled,
+    getWindow,
+    getMode,
+  });
+  startShellAutoUpdatePolling(rendererReady);
+
   async function poll(autoApply: boolean) {
     // hasInternet() probes the OTA manifest host (GitHub Pages). The server
     // update lives on different hosts (git remote / PyPI) with its own
@@ -253,7 +286,7 @@ export function initUpdater(
     }
 
     if (ui.updateAvailable) console.log(`[updater] UI update available: ${ui.newVersion}`);
-    if (server.updateAvailable) console.log(`[updater] server update: ${server.currentVersion} → ${server.latestVersion}`);
+    if (server.updateAvailable) console.log(`[updater] server update (${server.component ?? 'cowork-server'}): ${server.currentVersion} → ${server.latestVersion}`);
 
     // A UI held back only for server-compat is still a candidate when a server
     // update is also pending: the server-first apply brings the server current,
@@ -272,19 +305,35 @@ export function initUpdater(
       serverDown: !isServerRunning(),
       isBootCheck: autoApply,
       mode: getMode(),
+      repairOnly: !!server.repair,
     });
 
     if (applyServer || applyUi) {
       if (applyServer && !isServerRunning()) console.log('[updater] server is down — applying server update to recover');
       await applyUpdates(getWindow, applyServer, applyUi);
     } else {
+      // The stream repair is boot-only: a downgrade pill mid-session reads as
+      // the app being confused, so a pending repair is never surfaced here.
+      const surfaceServer = server.updateAvailable && !server.repair;
+      if (!ui.updateAvailable && !surfaceServer) {
+        console.log('[updater] stream repair pending — applies at the next boot, not surfaced mid-session');
+        return;
+      }
+      // An anton-only server update (ENG-1094) shares cowork-server's version,
+      // so a bare version number would read as blank/wrong — name the component
+      // that's actually changing. A cowork-server (or git) update keeps the
+      // bare version it always showed.
+      const serverLabel = server.component === 'anton-agent' && server.latestVersion
+        ? `${server.component} ${server.latestVersion}`
+        : server.latestVersion;
       sendStatus(getWindow, {
         phase: 'available',
         // Interim: surface whichever version we have so the banner never
         // renders blank. Longer term this collapses to one unified version.
-        version: ui.newVersion ?? server.latestVersion,
-        serverUpdate: server.updateAvailable,
-        serverVersion: server.latestVersion,
+        version: ui.newVersion ?? (surfaceServer ? serverLabel : undefined),
+        serverUpdate: surfaceServer,
+        serverVersion: surfaceServer ? server.latestVersion : undefined,
+        serverComponent: surfaceServer ? server.component : undefined,
       });
     }
   }

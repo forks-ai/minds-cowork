@@ -8,11 +8,11 @@
    plus _streaming) and our real Composer + project/model state. Tokens come
    from CSS vars so the panel reads correctly in both light and dark themes. */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { forwardRef, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import Ico from '../components/Icons';
 import Composer from '../components/Composer';
-import { Alert, Card } from '../components/ui';
+import { Alert, Card, Tooltip } from '../components/ui';
 import { MarkdownContent } from '../components/markdown/MarkdownContent';
 import { ThinkingBlock } from '../components/thinking/ThinkingBlock';
 import { WorkingIndicator } from '../components/thinking/WorkingIndicator';
@@ -23,6 +23,7 @@ import { ScratchpadModal } from '../components/thinking/ScratchpadModal';
 import { ProgressBox, WorkingFolderBox, ContextBox } from '../components/rail';
 import { ArtifactViewer } from '../components/artifact';
 import SkillCard from '../components/SkillCard';
+import AskUserCard from '../components/AskUserCard';
 import { DataVaultFormPanel } from '../components/datavault/DataVaultFormPanel';
 import { getForm as getDataVaultForm, setForm as setDataVaultForm, subscribe as subscribeDataVaultForm, clearForm as clearDataVaultForm } from '../components/datavault/formStore';
 import { FormErrorBoundary } from '../components/datavault/FormErrorBoundary';
@@ -80,28 +81,6 @@ function formatMetaTime(value) {
   return `${month} ${d.getDate()}, ${formatTime(d)}`;
 }
 
-function dividerLabel(date = new Date()) {
-  const today = new Date();
-  const sameDay = date.toDateString() === today.toDateString();
-  const month = date.toLocaleString('en-US', { month: 'short' });
-  return `${sameDay ? 'Today' : date.toLocaleString('en-US', { weekday: 'short' })} · ${month} ${date.getDate()}`;
-}
-
-function Divider({ label }) {
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 12,
-      fontFamily: FONT_DISPLAY, fontWeight: 600, letterSpacing: '0.18em',
-      fontSize: 10.5, color: T.ink4, textTransform: 'uppercase',
-      marginTop: 8,
-    }}>
-      <span style={{ flex: 1, height: 1, background: T.line }} />
-      <span>{label}</span>
-      <span style={{ flex: 1, height: 1, background: T.line }} />
-    </div>
-  );
-}
-
 // ─── Shared turn-action toolbar ──────────────────────────────────────────
 // Used by both user and assistant turns for consistent styling. Actions
 // fade in on hover of the parent turn, but stay visible when `isLast`
@@ -121,40 +100,44 @@ function TurnActions({ getText, onEdit, onDelete, isLast = false, align = 'left'
   };
   return (
     <div
-      className={`turn-actions${isLast ? ' is-last' : ''}`}
-      style={{ justifyContent: align === 'right' ? 'flex-end' : 'flex-start' }}
+      className={`turn-actions${isLast ? ' is-last' : ''} ${align === 'right' ? 'justify-end' : 'justify-start'}`}
     >
       {onEdit && (
+        <Tooltip content="Edit and resend">
+          <button
+            type="button"
+            className="turn-action-btn"
+            onClick={onEdit}
+            aria-label="Edit and resend this message"
+          >
+            {Ico.edit ? Ico.edit(ICON_SZ) : Ico.pencil ? Ico.pencil(ICON_SZ) : Ico.code(ICON_SZ)}
+          </button>
+        </Tooltip>
+      )}
+      <Tooltip content={copied ? 'Copied' : 'Copy'}>
         <button
           type="button"
           className="turn-action-btn"
-          onClick={onEdit}
-          title="Edit and resend"
-          aria-label="Edit and resend this message"
+          aria-label={copied ? 'Copied' : 'Copy'}
+          onClick={onCopy}
+          // cascade-forced: .turn-action-btn sets `color: inherit` at rest, which
+          // beats a text-accent utility (equal specificity, globals.css loads later).
+          style={copied ? { color: 'var(--accent)' } : undefined}
         >
-          {Ico.edit ? Ico.edit(ICON_SZ) : Ico.pencil ? Ico.pencil(ICON_SZ) : Ico.code(ICON_SZ)}
+          {copied ? Ico.check(ICON_SZ) : Ico.copy(ICON_SZ)}
         </button>
-      )}
-      <button
-        type="button"
-        className="turn-action-btn"
-        title={copied ? 'Copied' : 'Copy'}
-        aria-label={copied ? 'Copied' : 'Copy'}
-        onClick={onCopy}
-        style={copied ? { color: 'var(--accent)' } : undefined}
-      >
-        {copied ? Ico.check(ICON_SZ) : Ico.copy(ICON_SZ)}
-      </button>
+      </Tooltip>
       {onDelete && (
-        <button
-          type="button"
-          className="turn-action-btn turn-action-btn--danger"
-          title="Delete"
-          aria-label="Delete"
-          onClick={onDelete}
-        >
-          {Ico.trash(ICON_SZ)}
-        </button>
+        <Tooltip content="Delete">
+          <button
+            type="button"
+            className="turn-action-btn turn-action-btn--danger"
+            aria-label="Delete"
+            onClick={onDelete}
+          >
+            {Ico.trash(ICON_SZ)}
+          </button>
+        </Tooltip>
       )}
     </div>
   );
@@ -179,7 +162,6 @@ function TurnActions({ getText, onEdit, onDelete, isLast = false, align = 'left'
 // "Disconnect". Both stay in the chat row so the user can bail or
 // destroy without scrolling around to find a menu.
 function ConnectIntroBubble({ title, connector, onHoverChange, modify = false, onCancel, onDisconnect, onClickCard }) {
-  const [hover, setHover] = useState(false);
   const iconName = connector?.logo || 'database';
   const Icon = (Ico[iconName] || Ico.database);
   const clickable = typeof onClickCard === 'function';
@@ -188,57 +170,34 @@ function ConnectIntroBubble({ title, connector, onHoverChange, modify = false, o
   // and two headers stacked back-to-back read as a stutter. The
   // card itself is visually distinct enough to stand on its own.
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingBottom: 4 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+    <div className="flex flex-col gap-2 pb-1">
+      <div className="flex items-center gap-2.5 flex-wrap">
         <div
           role={clickable ? 'button' : undefined}
           tabIndex={clickable ? 0 : undefined}
           onClick={clickable ? onClickCard : undefined}
           onKeyDown={clickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClickCard(); } } : undefined}
-          onMouseEnter={() => { setHover(true); onHoverChange?.(true); }}
-          onMouseLeave={() => { setHover(false); onHoverChange?.(false); }}
-          style={{
-            display: 'inline-flex', alignItems: 'center', gap: 12,
-            padding: '12px 14px',
-            background: hover
-              ? 'color-mix(in srgb, var(--accent) 10%, var(--surface))'
-              : 'var(--surface)',
-            border: `1px solid ${hover ? 'var(--accent)' : T.line}`,
-            borderRadius: 12,
-            maxWidth: '78%',
-            cursor: clickable ? 'pointer' : 'default',
-            transition: 'border-color 140ms ease, background 140ms ease, box-shadow 140ms ease',
-            boxShadow: hover
-              ? `0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent)`
-              : 'none',
-            outline: 'none',
-          }}
+          onMouseEnter={() => onHoverChange?.(true)}
+          onMouseLeave={() => onHoverChange?.(false)}
+          className={`inline-flex items-center gap-3 py-3 px-3.5 rounded-xl max-w-[78%] outline-none bg-surface border border-solid border-line hover:border-accent hover:bg-[color-mix(in_srgb,var(--accent)_10%,var(--surface))] hover:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_18%,transparent)] transition-[border-color,background,box-shadow] duration-[140ms] ease-[ease] ${clickable ? 'cursor-pointer' : 'cursor-default'}`}
         >
-          <span style={{
-            display: 'inline-grid', placeItems: 'center',
-            width: 36, height: 36, borderRadius: 8,
-            background: 'var(--surface-2)',
-            color: connector?.logo_color || 'var(--ink-3)',
-            flexShrink: 0,
-          }}>
+          <span
+            className="inline-grid place-items-center w-9 h-9 rounded-lg bg-surface-2 flex-shrink-0"
+            style={{ color: connector?.logo_color || 'var(--ink-3)' }}
+          >
             {Icon(20)}
           </span>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-            <span style={{
-              fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 14,
-              color: T.ink, letterSpacing: '0',
-            }}>{title}</span>
-            <span style={{
-              fontFamily: FONT_BODY, fontSize: 12.5, color: T.ink3,
-            }}>
+          <div className="flex flex-col gap-0.5 min-w-0">
+            <span className="font-display font-semibold text-base text-ink tracking-normal">{title}</span>
+            <span className="font-body text-sm text-ink-3">
               {clickable
-                ? <>Click to re-open the form <span aria-hidden style={{ color: 'var(--accent)' }}>→</span></>
-                : <>Fill out the form on the side panel <span aria-hidden style={{ color: 'var(--accent)' }}>→</span></>}
+                ? <>Click to re-open the form <span aria-hidden className="text-accent">→</span></>
+                : <>Fill out the form on the side panel <span aria-hidden className="text-accent">→</span></>}
             </span>
           </div>
         </div>
         {modify && (
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <div className="inline-flex items-center gap-1.5">
             {onCancel && (
               <ConnectIntroPillButton
                 kind="ghost"
@@ -247,7 +206,7 @@ function ConnectIntroBubble({ title, connector, onHoverChange, modify = false, o
                 // chevronLeft yet, and the `←` matches the "Back to
                 // options" treatment used elsewhere in the codebase.
                 renderIcon={() => (
-                  <span aria-hidden style={{ fontSize: 14, lineHeight: 1, display: 'inline-block', marginTop: -1 }}>←</span>
+                  <span aria-hidden className="text-base leading-none inline-block -mt-px">←</span>
                 )}
                 label="Cancel"
               />
@@ -277,40 +236,18 @@ function ConnectIntroBubble({ title, connector, onHoverChange, modify = false, o
 // rounded shape so the row reads as a clean affordance group next
 // to the connector card.
 function ConnectIntroPillButton({ kind, renderIcon, label, onClick }) {
-  const [hover, setHover] = useState(false);
   const isDanger = kind === 'danger';
-  const baseColor = isDanger ? 'var(--danger)' : 'var(--ink-3)';
-  const hoverColor = isDanger ? 'var(--danger)' : 'var(--ink)';
-  const baseBg = isDanger
-    ? 'color-mix(in srgb, var(--danger) 8%, transparent)'
-    : 'transparent';
-  const hoverBg = isDanger
-    ? 'color-mix(in srgb, var(--danger) 14%, transparent)'
-    : 'var(--surface-2)';
-  const baseBorder = isDanger
-    ? '1px solid color-mix(in srgb, var(--danger) 30%, transparent)'
-    : '1px solid transparent';
-  const hoverBorder = isDanger
-    ? '1px solid color-mix(in srgb, var(--danger) 45%, transparent)'
-    : '1px solid var(--line)';
   return (
     <button
       type="button"
       onClick={onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        display: 'inline-flex', alignItems: 'center', gap: 6,
-        padding: '6px 12px', borderRadius: 999,
-        background: hover ? hoverBg : baseBg,
-        border: hover ? hoverBorder : baseBorder,
-        color: hover ? hoverColor : baseColor,
-        fontFamily: FONT_BODY, fontSize: 12.5, fontWeight: 500,
-        cursor: 'pointer',
-        transition: 'background 140ms ease, border-color 140ms ease, color 140ms ease',
-      }}
+      className={`inline-flex items-center gap-1.5 py-1.5 px-3 rounded-full font-body text-sm font-medium cursor-pointer transition-colors duration-[140ms] ease-[ease] border border-solid ${
+        isDanger
+          ? 'bg-[color-mix(in_srgb,var(--danger)_8%,transparent)] border-[color-mix(in_srgb,var(--danger)_30%,transparent)] text-danger hover:bg-[color-mix(in_srgb,var(--danger)_14%,transparent)] hover:border-[color-mix(in_srgb,var(--danger)_45%,transparent)]'
+          : 'bg-transparent border-transparent text-ink-3 hover:bg-surface-2 hover:border-line hover:text-ink'
+      }`}
     >
-      <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+      <span className="inline-flex items-center">
         {typeof renderIcon === 'function' ? renderIcon(13) : null}
       </span>
       {label}
@@ -347,7 +284,26 @@ function userTurnAttachmentLabel(a) {
   return 'File';
 }
 
+// Long user messages clamp to ~8 lines behind a "Show more" toggle so a big
+// pasted prompt doesn't dominate the viewport before the answer starts.
+const USER_CLAMP_MAX_PX = 176;
+
 function UserTurn({ content, attachments, time, onDelete, onEdit, isLast, projectName, conversationId }) {
+  const contentRef = useRef(null);
+  const [collapsed, setCollapsed] = useState(true);
+  const [overflowing, setOverflowing] = useState(false);
+  useLayoutEffect(() => {
+    const el = contentRef.current;
+    if (!el) return undefined;
+    // scrollHeight reports full content height even while max-height clamps
+    // the box, so overflow is measurable without expanding first. Re-runs on
+    // width changes (sidebar toggle, window resize) via the ResizeObserver.
+    const measure = () => setOverflowing(el.scrollHeight > USER_CLAMP_MAX_PX + 8);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [content]);
   return (
     <div className="user-turn">
       <div className="user-turn-inner">
@@ -358,12 +314,28 @@ function UserTurn({ content, attachments, time, onDelete, onEdit, isLast, projec
               charts are gated off so a user typing a special fence in
               the composer can't trigger the side-effect renderers
               reserved for assistant output. */}
-          <MarkdownContent
-            text={content}
-            variant="user"
-            enableForms={false}
-            enableCharts={false}
-          />
+          <div
+            ref={contentRef}
+            className={collapsed && overflowing ? 'user-turn-clamp user-turn-clamp--faded' : undefined}
+            style={collapsed && overflowing ? { maxHeight: USER_CLAMP_MAX_PX } : undefined}
+          >
+            <MarkdownContent
+              text={content}
+              variant="user"
+              enableForms={false}
+              enableCharts={false}
+            />
+          </div>
+          {overflowing && (
+            <button
+              type="button"
+              className="user-turn-more"
+              aria-expanded={!collapsed}
+              onClick={() => setCollapsed((c) => !c)}
+            >
+              {collapsed ? 'Show more' : 'Show less'}
+            </button>
+          )}
         </div>
         {attachments?.map((a) => {
           // Image attachments preview inline as a thumbnail (fetched as a
@@ -416,14 +388,13 @@ const CHAT_ORB_SIZE = 22;
 function AnswerTurn({ state = 'done', time, children, showActions = true, copyText, onDelete, agentLabel, isLast }) {
   return (
     <div
-      className="answer-turn"
       // marginTop pulls the answer closer to ITS question (the column gap
       // is sized for the roomier answer → next-question separation).
-      style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: -10, paddingBottom: 4 }}
+      className="answer-turn flex flex-col gap-2.5 -mt-2.5 pb-1"
     >
       {children}
       {state !== 'thinking' && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="flex items-center gap-2">
           {showActions && (
             <TurnActions getText={() => copyText || ''} onDelete={onDelete} isLast={isLast} />
           )}
@@ -473,9 +444,49 @@ function StepArtifacts({ steps, onOpen, projectPath }) {
   const artifacts = steps?.filter((s) => s.badge === 'Artifact') || [];
   if (artifacts.length === 0) return null;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 4 }}>
+    <div className="flex flex-col gap-3 mt-1">
       {artifacts.map((s) => (
         <ArtifactCard key={s.id} artifact={artifactStepToCard(s, projectPath)} onOpen={onOpen} />
+      ))}
+    </div>
+  );
+}
+
+// Renders any badge='AskUser' steps as inline question cards, the same way
+// StepArtifacts renders artifacts — both receive the shared `steps` array.
+//
+// `expired` is derived PER QUESTION, not per conversation. Conversation-level
+// liveness ("this chat has something in flight") is the wrong granularity: it
+// renders an unanswered card from an EARLIER turn with live buttons for as long
+// as any new stream runs on the same conversation, and clicking it 404s — which
+// then retires whatever question the new turn is actually blocked on.
+//
+// Two rules:
+//   - an answered question is never expired; the card renders its outcome, and
+//     the generic "no longer active" line would be noise on top of it
+//   - only the LAST unanswered question of a LIVE turn can still be answered
+//
+// That last rule leans on an invariant owned by anton, not by this repo: the
+// `ask_user` tool blocks the turn, so anton never publishes a second question
+// while one is outstanding, and it always retires the outstanding one (answer,
+// cancel, or the server's 300 s timeout) before the turn ends. This repo can
+// neither see nor enforce that cross-repo contract, so an earlier unanswered
+// card is treated as expired rather than trusted to still be answerable.
+function StepQuestions({ steps, conversationId, conversationLive, onAnswered }) {
+  const questions = steps?.filter((s) => s.badge === 'AskUser') || [];
+  if (questions.length === 0) return null;
+  let lastUnanswered = -1;
+  questions.forEach((s, i) => { if (!s.data?.answer) lastUnanswered = i; });
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 4 }}>
+      {questions.map((s, i) => (
+        <AskUserCard
+          key={s.id}
+          step={s}
+          conversationId={conversationId}
+          expired={!s.data?.answer && !(conversationLive && i === lastUnanswered)}
+          onAnswered={onAnswered}
+        />
       ))}
     </div>
   );
@@ -493,7 +504,7 @@ function StepSkills({ steps, latestByKey, messageIndex, projectName }) {
   }
   if (skills.length === 0) return null;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 4 }}>
+    <div className="flex flex-col gap-3 mt-1">
       {skills.map((s) => (
         <SkillCard key={s.id} skill={s.data || {}} projectName={projectName} />
       ))}
@@ -630,17 +641,12 @@ function ArtifactCard({ artifact, onOpen }) {
       padding="cozy"
       onActivate={canAct ? handleOpen : undefined}
       aria-label={canAct ? `Open preview: ${artifact.title}` : disabledReason || 'No file path'}
-      style={{
-        display: 'grid', gridTemplateColumns: '64px 1fr auto', alignItems: 'center', gap: 16,
-      }}
+      className="grid grid-cols-[64px_1fr_auto] items-center gap-4"
     >
-      <div style={{
-        width: 64, height: 64, background: T.surface2, borderRadius: 8,
-        display: 'grid', placeItems: 'center', color: T.accent,
-      }}>
+      <div className="w-16 h-16 bg-surface-2 rounded-lg grid place-items-center text-accent">
         {artifact.icon === 'doc' ? Ico.doc(26) : Ico.sparkle(26)}
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+      <div className="flex flex-col gap-[3px] min-w-0">
         {/* Title doubles as the primary "open preview" affordance —
             clicking it routes through the same handler the Open
             button uses. Hover gets an accent + underline so the
@@ -651,6 +657,11 @@ function ArtifactCard({ artifact, onOpen }) {
           onClick={(e) => { e.stopPropagation(); if (canAct) handleOpen(); }}
           disabled={!canAct}
           title={canAct ? `Open preview: ${artifact.title}` : disabledReason || 'No file path'}
+          // kept inline: `all: unset` writes an inline declaration for every
+          // longhand (incl. color/background), which always beats a Tailwind
+          // utility class of equal-or-lower specificity — so every property
+          // touched by the reset has to stay co-located here, and the hover
+          // recolor below has to keep mutating .style directly for the same reason.
           style={{
             all: 'unset',
             cursor: canAct ? 'pointer' : 'not-allowed',
@@ -664,53 +675,45 @@ function ArtifactCard({ artifact, onOpen }) {
           onMouseOver={(e) => { if (canAct) { e.currentTarget.style.color = T.accent; e.currentTarget.style.textDecoration = 'underline'; e.currentTarget.style.textUnderlineOffset = '3px'; } }}
           onMouseOut={(e) => { e.currentTarget.style.color = T.ink; e.currentTarget.style.textDecoration = 'none'; }}
         >{artifact.title}</button>
-        <span style={{ fontFamily: FONT_BODY, fontSize: 12.5, color: T.ink3 }}>
+        <span className="font-body text-sm text-ink-3">
           {artifact.kind || 'live artifact'}
         </span>
         {previewText && (
-          <span title={previewText} style={{
-            fontFamily: FONT_MONO, fontSize: 10.5, color: T.ink4,
-            marginTop: 2, letterSpacing: '0.04em',
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>
+          <span
+            title={previewText}
+            className="font-mono text-[10.5px] text-ink-4 mt-0.5 tracking-[0.04em] overflow-hidden text-ellipsis whitespace-nowrap"
+          >
             {previewText}
           </span>
         )}
       </div>
-      <div style={{ display: 'flex', gap: 6 }}>
+      <div className="flex gap-1.5">
         {status && (
-          <span aria-live="polite" style={{
-            alignSelf: 'center',
-            maxWidth: 180,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            fontFamily: FONT_BODY,
-            fontSize: 11.5,
-            color: status.kind === 'error' ? 'var(--danger)' : T.accent,
-          }}>
+          <span
+            aria-live="polite"
+            className={`self-center max-w-[180px] overflow-hidden text-ellipsis whitespace-nowrap font-body text-[11.5px] ${status.kind === 'error' ? 'text-danger' : 'text-accent'}`}
+          >
             {status.text}
           </span>
         )}
         {canExport && (
-          <div style={{ position: 'relative' }} onClick={(e) => e.stopPropagation()}>
-            <SmallBtn
-              disabled={!canAct || exporting}
-              onClick={() => setExportOpen((v) => !v)}
-              title="Export to another format"
-            >
-              Export ▾
-            </SmallBtn>
+          <div className="relative" onClick={(e) => e.stopPropagation()}>
+            <Tooltip content="Export to another format">
+              {/* Native title only while disabled — a disabled button fires no
+                  hover/focus events, so the styled Tooltip can't open. */}
+              <SmallBtn
+                disabled={!canAct || exporting}
+                onClick={() => setExportOpen((v) => !v)}
+                title={(!canAct || exporting) ? 'Export to another format' : undefined}
+              >
+                Export ▾
+              </SmallBtn>
+            </Tooltip>
             {exportOpen && (
               <div
                 role="menu"
-                style={{
-                  position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 20,
-                  // No border — floats on --sh-popup alone (ENG-790).
-                  background: T.surface, borderRadius: 10,
-                  boxShadow: 'var(--sh-popup)', padding: 4, minWidth: 140,
-                  display: 'flex', flexDirection: 'column', gap: 2,
-                }}
+                // No border — floats on --sh-popup alone (ENG-790).
+                className="absolute top-[calc(100%+4px)] right-0 z-20 bg-surface rounded-[10px] shadow-sh-popup p-1 min-w-[140px] flex flex-col gap-0.5"
               >
                 {[['pdf', 'PDF'], ['docx', 'Word (.docx)'], ['html', 'HTML']].map(([fmt, label]) => (
                   <button
@@ -718,6 +721,10 @@ function ArtifactCard({ artifact, onOpen }) {
                     type="button"
                     role="menuitem"
                     onClick={(e) => { e.stopPropagation(); handleExport(fmt); }}
+                    // kept inline: same all:unset cascade-priority reason as the
+                    // title button above — the hover background mutation below
+                    // needs a subsequent inline write to win, so it can't move
+                    // to a hover: utility class either.
                     style={{
                       all: 'unset', cursor: 'pointer', padding: '7px 10px', borderRadius: 7,
                       fontFamily: FONT_BODY, fontSize: 12.5, color: T.ink,
@@ -731,50 +738,46 @@ function ArtifactCard({ artifact, onOpen }) {
           </div>
         )}
         {!host.isWeb && (
-          <SmallBtn disabled={!canAct} onClick={handleReveal} title={canAct ? `${revealLabel}: ${path}` : disabledReason || 'No file path'}>
-            {revealLabel}
-          </SmallBtn>
+          <Tooltip content={canAct ? `${revealLabel}: ${path}` : ''}>
+            <SmallBtn disabled={!canAct} onClick={handleReveal} title={canAct ? undefined : (disabledReason || 'No file path')}>
+              {revealLabel}
+            </SmallBtn>
+          </Tooltip>
         )}
         {(!host.isWeb || isHtml) && (
-          <SmallBtn primary disabled={!canAct} onClick={handleOpen} title={canAct ? `Open ${path}` : disabledReason || 'No file path'}>
-            Open
-          </SmallBtn>
+          <Tooltip content={canAct ? `Open ${path}` : ''}>
+            <SmallBtn primary disabled={!canAct} onClick={handleOpen} title={canAct ? undefined : (disabledReason || 'No file path')}>
+              Open
+            </SmallBtn>
+          </Tooltip>
         )}
       </div>
     </Card>
   );
 }
 
-function SmallBtn({ primary, children, onClick, title, disabled }) {
+// The primary ("Open") CTA no longer hard-fills raw --accent (which glared in
+// dark). Both variants are class-based now so the primary can adopt the
+// canonical .btn.primary color logic — opaque accent in light, quiet accent
+// glass in dark — via .chat-card-btn(--primary) in globals.css.
+const SmallBtn = forwardRef(function SmallBtn({ primary, children, onClick, title, disabled, ...rest }, ref) {
   return (
     <button
+      ref={ref}
       type="button"
       onClick={(e) => { e.stopPropagation(); if (!disabled) onClick?.(); }}
       title={title}
       disabled={disabled}
-      style={{
-        all: 'unset', cursor: disabled ? 'not-allowed' : 'pointer',
-        display: 'inline-flex', alignItems: 'center', gap: 6,
-        padding: '6px 10px', borderRadius: 7,
-        background: primary ? T.accent : T.surface,
-        color: primary ? '#fff' : T.ink,
-        border: `1px solid ${primary ? T.accent : T.line2}`,
-        fontFamily: FONT_BODY, fontSize: 12, fontWeight: 500,
-        whiteSpace: 'nowrap',
-        opacity: disabled ? 0.5 : 1,
-      }}
+      className={primary ? 'chat-card-btn chat-card-btn--primary' : 'chat-card-btn'}
+      {...rest}
     >{children}</button>
   );
-}
+});
 
 // Streaming cursor — blinking accent caret (orb stays on the header).
 function StreamCursor() {
   return (
-    <span style={{
-      display: 'inline-block', width: 8, height: 14,
-      background: T.accent, marginLeft: 4, verticalAlign: 'text-bottom',
-      animation: 'cb 1s steps(2) infinite',
-    }} />
+    <span className="inline-block w-2 h-3.5 bg-accent ml-1 align-text-bottom animate-[cb_1s_steps(2)_infinite]" />
   );
 }
 
@@ -812,51 +815,128 @@ async function waitForServerReady(timeoutMs = 8000) {
 // cards (previously four byte-identical copies of this scaffolding, drifting
 // one tweak at a time — ENG-650). Callers own copy + button wiring; the shell
 // owns layout and button styling.
-const ACTION_CARD_BTN = {
-  borderRadius: 8, padding: '8px 14px',
-  fontFamily: FONT_BODY, fontSize: 13, fontWeight: 500, cursor: 'pointer',
-};
-// bg=ink / text=bg so the label keeps contrast in BOTH themes: light → dark
-// button / light text, dark → light button / dark text. A hardcoded #fff went
-// invisible in dark mode (ink is near-white there → white-on-white).
-const ACTION_CARD_BTN_PRIMARY = {
-  ...ACTION_CARD_BTN, border: 'none', background: T.ink, color: 'var(--bg)',
-};
-const ACTION_CARD_BTN_SECONDARY = {
-  ...ACTION_CARD_BTN, border: `1px solid ${T.line}`, background: 'transparent', color: T.ink,
-};
-
 // buttons: [{ label, onClick, primary, disabled, style }] — `style` overlays
 // the base for per-button tweaks (e.g. the reconnect busy state). An empty
 // list hides the row (e.g. reconnect's "done" state).
 function ActionCard({ time, agentLabel, title, body, buttons = [] }) {
   return (
     <AnswerTurn state="done" time={time} showActions={false} agentLabel={agentLabel}>
-      <div style={{
-        border: `1px solid ${T.line}`, background: T.surface, borderRadius: 12,
-        padding: '16px 18px', maxWidth: 520, display: 'flex', flexDirection: 'column', gap: 10,
-      }}>
-        <div className="s-h3" style={{ color: T.ink }}>
+      <div className="flex flex-col gap-2.5 max-w-[520px] py-4 px-[18px] rounded-xl border border-solid border-line bg-surface">
+        {/* .s-h3 already sets color: var(--ink) — no inline override needed. */}
+        <div className="s-h3">
           {title}
         </div>
-        <div style={{ fontFamily: FONT_BODY, fontSize: 13.5, lineHeight: 1.55, color: T.ink2 }}>
+        <div className="font-body text-[13.5px] leading-[1.55] text-ink-2">
           {body}
         </div>
         {buttons.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+          <div className="flex flex-wrap gap-2 mt-1">
             {buttons.map((b, i) => (
               <button
                 key={i}
                 type="button"
                 onClick={b.onClick}
                 disabled={b.disabled}
-                style={{ ...(b.primary ? ACTION_CARD_BTN_PRIMARY : ACTION_CARD_BTN_SECONDARY), ...b.style }}
+                // bg=ink / text=bg so the label keeps contrast in BOTH themes: light →
+                // dark button / light text, dark → light button / dark text. A
+                // hardcoded #fff went invisible in dark mode (ink is near-white
+                // there → white-on-white).
+                className={`rounded-lg py-2 px-3.5 font-body text-[13px] font-medium cursor-pointer ${b.primary ? 'border-0 bg-ink text-bg' : 'border border-solid border-line bg-transparent text-ink'}`}
+                style={b.style}
               >{b.label}</button>
             ))}
           </div>
         )}
       </div>
     </AnswerTurn>
+  );
+}
+
+// ── AllowanceExhaustedCard: the free monthly grant, not a drained wallet ───
+// ENG-1537. auth's `access.py` issues `included_allowance_exhausted` ONLY for a
+// free-bucket model on an org that has NEVER topped up, so this user has not
+// spent money — they used the monthly grant, and it resets. Two things follow,
+// and the old shared out-of-credits card got both wrong: the reset date is a
+// genuinely free way forward (hiding it while asking for money is the defect),
+// and "unlock" is literally true, because non-free models need a wallet this
+// org doesn't have.
+//
+// The date is formatted here, not server-side: only the client knows the
+// viewer's timezone, and parsing it on the server shifts the day for some
+// users. Anything unusable — absent, malformed, or already past on a reloaded
+// conversation — degrades to "next month" rather than rendering "Invalid Date"
+// or a stale month.
+function formatAllowanceReset(resetAt) {
+  if (!resetAt) return 'next month';
+  const d = new Date(resetAt);
+  if (Number.isNaN(d.getTime())) return 'next month';
+  if (d.getTime() <= Date.now()) return 'next month';
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'long' });
+}
+
+// ── RateLimitedCard: a velocity limit, NOT an out-of-credits state ─────────
+// ENG-1537. The org exceeded requests/tokens per minute; credits cannot lift
+// that ceiling, so this card must never offer a top-up. anton already waited
+// in-turn (up to ~90s) before this rendered, so reaching it means the window
+// hadn't cleared — which is precisely why Retry is time-gated against the
+// gateway's own Retry-After: an immediate retry re-sends a large context into
+// the limiter that just refused it, reproducing the amplification loop the fix
+// removed, only user-initiated.
+//
+// No hint (older gateway, stripped header) → an ungated Retry. Better an
+// honest button than an invented countdown.
+// Longest we will ever disable Retry. The server clamps nothing, and anton
+// cards immediately above its own 60s cap rather than sleeping — so a large
+// hint arrives here as a real value. Ungated it would disable the button for
+// hours (measured: retryAfter=30000 gated for 8.3h), which is indistinguishable
+// from a broken card (ENG-1537 review).
+const MAX_RETRY_GATE_MS = 10 * 60 * 1000;
+
+function RateLimitedCard({ time, agentLabel, body, retryAt, onRetry }) {
+  const readyAt = useMemo(() => {
+    // The server sends an ABSOLUTE, offset-bearing instant. Deliberately not
+    // derived from the message's created_at + retryAfter: created_at is
+    // serialised offset-less, so JS parses it as local time — the gate lasts
+    // hours west of UTC and no-ops east of it, and a TZ=UTC suite sees neither.
+    if (typeof retryAt !== 'string') return null;
+    // REQUIRE an offset. An offset-less timestamp is what made the original bug
+    // invisible: JS parses "2026-08-12T01:04:55" as LOCAL time, so the gate ran
+    // ~7h long west of UTC and no-opped east of it — and the suite pins TZ=UTC
+    // globally, so no assertion could see either direction. Rejecting the naive
+    // form here turns that whole class of regression into "no gate" rather than
+    // "a wrong gate", and makes it testable in any zone.
+    if (!/(?:Z|[+-]\d{2}:?\d{2})$/.test(retryAt)) return null;
+    const at = new Date(retryAt).getTime();
+    if (Number.isNaN(at)) return null;
+    return Math.min(at, Date.now() + MAX_RETRY_GATE_MS);
+  }, [retryAt]);
+
+  const [now, setNow] = useState(() => Date.now());
+  const remaining = readyAt ? Math.max(0, Math.ceil((readyAt - now) / 1000)) : 0;
+
+  useEffect(() => {
+    if (!readyAt || remaining <= 0) return undefined;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [readyAt, remaining]);
+
+  const buttons = onRetry
+    ? [{
+        label: remaining > 0 ? `Try again in ${remaining}s` : 'Try again',
+        onClick: remaining > 0 ? undefined : onRetry,
+        disabled: remaining > 0,
+        primary: true,
+      }]
+    : [];
+
+  return (
+    <ActionCard
+      time={time}
+      agentLabel={agentLabel}
+      title="Too many requests too quickly"
+      body={body}
+      buttons={buttons}
+    />
   );
 }
 
@@ -1040,6 +1120,34 @@ function ProviderOverloadedCard({
   );
 }
 
+// Most recent user text before index `i` — the message whose turn failed.
+// Used by failure cards whose action is "resend the failed message".
+function lastUserTextBefore(visibleMessages, i) {
+  for (let j = i - 1; j >= 0; j--) {
+    const c = visibleMessages[j]?.role === 'user' && visibleMessages[j].content;
+    if (typeof c === 'string' && c) return c;
+  }
+  return '';
+}
+
+/**
+ * The pending composer redirect for the task on screen, or null.
+ *
+ * A drain is per-conversation: a reconnected background stream (tailInFlight)
+ * can drain task A's queue while the user is looking at task B, and A's text
+ * must neither land in B's composer nor be dropped while it waits for A to be
+ * opened again. Hence a per-task map rather than one shared slot.
+ *
+ * The entry carries the drained `attachments` alongside the text for the same
+ * reason: the staged-attachment list in App.jsx is app-wide, so files staged at
+ * drain time would appear on — and be sent from — whichever conversation is
+ * open. They are handed to the parent only when this task's entry is consumed.
+ */
+export function redirectForTask(redirects, taskId) {
+  if (!redirects || !taskId) return null;
+  return redirects[taskId] || null;
+}
+
 // ─── Main view ───────────────────────────────────────────────────────────
 export default function ChatView({
   task,
@@ -1065,6 +1173,7 @@ export default function ChatView({
   onDeleteTurn,
   onSubmitDataVaultForm,
   onNavigateToConnectors,
+  onDismissConnectForm,
   onCancelModify,
   onDisconnectModify,
   onMoveTaskToProject,
@@ -1079,16 +1188,69 @@ export default function ChatView({
   queuedMessages = [],
   onRemoveFromQueue,
   agentLabel,
+  // Conversation ids the server currently has an active producer for
+  // (App.jsx's cross-client sync feed). Used to decide whether an
+  // unanswered AskUser card is still live or "expired" — replay
+  // resurrects unanswered questions from persisted history, and a
+  // click on one with no live run behind it would 404.
+  inFlightSet,
+  // Pending composer redirects from App.jsx, keyed by conversation id:
+  // {[taskId]: {text, attachments, bump}}. A question appeared while messages
+  // were queued for that task, so their text and files are handed back to its
+  // composer instead of being auto-sent as the answer or left queued to
+  // deadlock. Only this task's entry is read, and consuming it calls
+  // onComposerRedirectConsumed(taskId, attachments) so the parent stages the
+  // files against THIS task and deletes the entry, which is also what stops it
+  // re-firing on a later remount.
+  composerRedirects,
+  onComposerRedirectConsumed,
+  // Lets App.jsx release a dead question's grip on the composer (see
+  // handleSendInTask's pendingQuestionFor check) as soon as the card
+  // itself learns the question is gone.
+  onQuestionAnswered,
 }) {
   const scrollRef = useRef(null);
   const { isNarrow } = useBreakpoint();
   // Wide: inline grid column. Narrow: fixed overlay from the right.
   const [railOpen, setRailOpen] = useState(true);
   const [railNarrowOpen, setRailNarrowOpen] = useState(false);
-  // Composer prefill — set by clicking Edit on a user message.
-  // `bump` is a monotonically-increasing nonce so the Composer's
-  // sync effect runs even when re-editing the same text.
+  // Composer prefill — set by clicking Edit on a user message, or by this
+  // task's entry in App.jsx's `composerRedirects` (a question appeared while
+  // messages were queued). `bump` is a monotonically-increasing nonce so the
+  // Composer's sync effect runs even when re-editing/re-redirecting the same
+  // text.
   const [composerPrefill, setComposerPrefill] = useState({ text: '', bump: 0 });
+  // Forward App.jsx's redirect for THIS task into the same prefill state Edit
+  // uses, so Composer only has to react to one prefill prop. Consuming the entry
+  // (deleting it in the parent) is what stops a stale drain re-applying on
+  // remount.
+  useEffect(() => {
+    const redirect = redirectForTask(composerRedirects, task?.id);
+    if (!redirect) return;
+    const restored = redirect.text || '';
+    if (restored) {
+      // `append` unconditionally, and there is nothing left to decide: since
+      // ENG-1221 the composer's text comes from `lib/draftStore` keyed by
+      // surface (Composer's `useDraft(conversationId)`, and this view passes
+      // `conversationId={task.id}`), so the value on screen IS this task's own
+      // draft — another conversation's draft can no longer be in the box, which
+      // is the state the old `draftTaskRef` ownership check existed to detect.
+      // A drain hands the user's own queued text BACK to them, so it joins that
+      // draft instead of destroying it. Do not reintroduce a guard here: with a
+      // per-surface store, "not ours" is unreachable, and a guard that misfires
+      // silently deletes text the user is mid-typing.
+      setComposerPrefill((prev) => ({
+        text: restored,
+        bump: (prev?.bump || 0) + 1,
+        append: true,
+      }));
+    }
+    // The files travel with the text on the same entry, so they are staged by
+    // the parent here — once, for the task actually on screen — rather than
+    // app-wide at drain time.
+    onComposerRedirectConsumed?.(task?.id, redirect.attachments);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [composerRedirects, task?.id]);
   // Inline rail only active on wide screens.
   const effectiveRailOpen = !isNarrow && railOpen;
   // Narrow-screen overlay rail.
@@ -1256,32 +1418,22 @@ export default function ChatView({
   }, [streamingMsg]);
 
   return (
-    <div ref={chatRef} style={{
-      flex: 1, minHeight: 0,
-      display: 'grid',
-      // minmax(0, 1fr) is critical — bare `1fr` lets the grid track
-      // EXPAND past its allocated size when an unbreakable child (e.g.
-      // a very long task title) demands more width, which pushes the
-      // rail off-screen and causes content to bleed visually behind
-      // the rail. minmax(0, …) tells grid the column can shrink to 0,
-      // so the conv col stays inside its track and content clips.
-      // On narrow screens the rail is always a fixed overlay, so the
-      // grid is always single-column.
-      gridTemplateColumns: effectiveRailOpen ? 'minmax(0, 1fr) 320px' : 'minmax(0, 1fr) 0px',
-      // Without an explicit row, the implicit row is sized to content,
-      // so the scroll region's inner content height grows the row past
-      // the container — the scroll bar never appears. 1fr forces the
-      // row to fill the container height so the inner overflowY can
+    <div
+      ref={chatRef}
+      // minmax(0, 1fr) is critical — bare `1fr` lets the grid track EXPAND
+      // past its allocated size when an unbreakable child (e.g. a very long
+      // task title) demands more width, which pushes the rail off-screen and
+      // causes content to bleed visually behind the rail. minmax(0, …) tells
+      // grid the column can shrink to 0, so the conv col stays inside its
+      // track and content clips. On narrow screens the rail is always a
+      // fixed overlay, so the grid is always single-column.
+      // gridTemplateRows: without an explicit row, the implicit row is sized
+      // to content, so the scroll region's inner content height grows the
+      // row past the container — the scroll bar never appears. 1fr forces
+      // the row to fill the container height so the inner overflowY can
       // create a real scroll context.
-      gridTemplateRows: '1fr',
-      transition: 'grid-template-columns 220ms cubic-bezier(.2,.7,.3,1)',
-      // Transparent so the gravity-field grid behind the app shows through.
-      background: 'transparent',
-      fontFamily: FONT_BODY,
-      color: T.ink2,
-      position: 'relative',
-      overflow: 'hidden',
-    }}>
+      className={`flex-1 min-h-0 grid grid-rows-[1fr] transition-[grid-template-columns] duration-[220ms] ease-[cubic-bezier(.2,.7,.3,1)] bg-transparent font-body text-ink-2 relative overflow-hidden ${effectiveRailOpen ? 'grid-cols-[minmax(0,1fr)_320px]' : 'grid-cols-[minmax(0,1fr)_0px]'}`}
+    >
       <OrbitProvider
         canvasRef={convRef}
         scrollRef={scrollRef}
@@ -1290,49 +1442,40 @@ export default function ChatView({
         activeSlot={orbView.activeSlot}
       >
       {/* ─── Conversation column ─── */}
-      <div ref={convRef} style={{
-        position: 'relative', overflow: 'hidden',
+      <div
+        ref={convRef}
         // Grid auto/1fr is more deterministic than nested flex+min-height
         // for the "header + scrollable body" layout — the 1fr row pins
         // the scroll area to the column's available height, so the inner
         // overflowY can actually scroll.
-        display: 'grid',
-        gridTemplateRows: 'auto 1fr',
-        minWidth: 0, minHeight: 0,
-      }}>
+        className="relative overflow-hidden grid grid-rows-[auto_1fr] min-w-0 min-h-0"
+      >
         {/* Floating expand-rail button — appears on the right edge of
             the conv column when the rail is collapsed. Mirror of the
             sidebar's hamburger pattern. */}
-        <button
-          type="button"
-          className="chat-rail-toggle"
-          onClick={() => isNarrow ? setRailNarrowOpen(true) : setRailOpen(true)}
-          title="Expand panel"
-          aria-label="Expand panel"
-          style={{
-            position: 'absolute',
-            top: 14, right: 14,
-            zIndex: 10,
-            width: 28, height: 28,
-            borderRadius: 6,
-            display: 'inline-grid', placeItems: 'center',
-            cursor: 'pointer',
-            background: 'transparent',
-            border: 0,
-            color: T.ink3,
-            opacity: (effectiveRailOpen || railOverlayOpen) ? 0 : 1,
-            transform: (effectiveRailOpen || railOverlayOpen) ? 'translateX(8px)' : 'translateX(0)',
-            pointerEvents: (effectiveRailOpen || railOverlayOpen) ? 'none' : 'auto',
-            transition:
-              `opacity 280ms cubic-bezier(0.32,0.72,0,1) ${(effectiveRailOpen || railOverlayOpen) ? '0ms' : '120ms'}, ` +
-              `transform 360ms cubic-bezier(0.32,0.72,0,1) ${(effectiveRailOpen || railOverlayOpen) ? '0ms' : '80ms'}`,
-            WebkitAppRegion: 'no-drag',
-          }}
-          onMouseOver={(e) => { e.currentTarget.style.color = 'var(--ink)'; e.currentTarget.style.background = 'var(--surface-2)'; }}
-          onMouseOut={(e) => { e.currentTarget.style.color = 'var(--ink-3)'; e.currentTarget.style.background = 'transparent'; }}
-        >
-          {Ico.panelExpandLeft(15)}
-        </button>
+        <Tooltip content="Expand panel">
+          <button
+            type="button"
+            onClick={() => isNarrow ? setRailNarrowOpen(true) : setRailOpen(true)}
+            aria-label="Expand panel"
+            // Only the truly dynamic bits (opacity/transform/pointerEvents driven by
+            // rail-open state, and the transition's per-state delay) stay inline —
+            // resting/hover color+background moved to className below so the
+            // hover: utility can win (an inline color/background at rest would
+            // otherwise out-specificity any stylesheet hover rule).
+            style={{
+              opacity: (effectiveRailOpen || railOverlayOpen) ? 0 : 1,
+              transform: (effectiveRailOpen || railOverlayOpen) ? 'translateX(8px)' : 'translateX(0)',
+              pointerEvents: (effectiveRailOpen || railOverlayOpen) ? 'none' : 'auto',
+              transition:
+                `opacity 280ms cubic-bezier(0.32,0.72,0,1) ${(effectiveRailOpen || railOverlayOpen) ? '0ms' : '120ms'}, ` +
+                `transform 360ms cubic-bezier(0.32,0.72,0,1) ${(effectiveRailOpen || railOverlayOpen) ? '0ms' : '80ms'}`,
+            }}
+            className="chat-rail-toggle absolute top-3.5 right-3.5 z-10 w-7 h-7 rounded-md inline-grid place-items-center cursor-pointer bg-transparent border-0 text-ink-3 hover:text-ink hover:bg-surface-2 [-webkit-app-region:no-drag]"
+          >
+            {Ico.panelExpandLeft(15)}
+          </button>
+        </Tooltip>
 
         {/* Header — reserve the shell-owned titlebar-safe inset on top so the
             breadcrumbs drop below the macOS traffic lights (and the floating
@@ -1340,20 +1483,13 @@ export default function ChatView({
             corner, staying left-aligned with the transcript below. `--titlebar-
             safe-top` is set on <main> by the shell and is 0 when the sidebar/
             rail covers the zone, so max() keeps the normal 14px padding then. */}
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          paddingTop: 'max(14px, var(--titlebar-safe-top, 0px))', paddingBottom: 14, paddingRight: 28,
-          paddingLeft: 28,
-          borderBottom: `1px solid ${T.line}`,
-          background: 'transparent',
-          flexShrink: 0,
+        <div
           // Belt + suspenders: even if a flex child miscalculates by a
-          // pixel, this prevents the header from visually pushing past
-          // the conv-col grid track (which is what was making the icons
-          // appear to slide behind the right rail).
-          minWidth: 0, overflow: 'hidden',
-          transition: 'padding 240ms cubic-bezier(0.32, 0.72, 0, 1)',
-        }}>
+          // pixel, min-w-0 + overflow-hidden prevents the header from
+          // visually pushing past the conv-col grid track (which is what
+          // was making the icons appear to slide behind the right rail).
+          className="flex items-center justify-between pt-[max(14px,var(--titlebar-safe-top,0px))] pb-3.5 pr-7 pl-7 bg-transparent flex-shrink-0 min-w-0 overflow-hidden transition-[padding] duration-[240ms] ease-[cubic-bezier(0.32,0.72,0,1)]"
+        >
           {/* Left side: [Project] › [Task] for chat tasks, or
               [Apps] › [Task] for connect-data flows (Connect Gmail,
               Modify gmail-prod, …). The connect-data flow is
@@ -1362,11 +1498,7 @@ export default function ChatView({
               inject as the first assistant message — that's stable
               across the lifetime of the task whether or not the
               form is currently mounted in the rail. */}
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 8,
-            minWidth: 0, flex: '1 1 0',
-            overflow: 'hidden',
-          }}>
+          <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
             {(() => {
               // The "Apps" crumb only makes sense while the form
               // panel is on screen — the user is mid-flow connecting
@@ -1410,10 +1542,7 @@ export default function ChatView({
             <CrumbSep />
             <div
               {...titleHoverProps}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 4,
-                minWidth: 0, flex: '1 1 0',
-              }}
+              className="flex items-center gap-1 min-w-0 flex-1"
             >
               {titleEditing ? (
                 <input
@@ -1436,18 +1565,11 @@ export default function ChatView({
                   spellCheck={false}
                   autoCapitalize="none"
                   autoCorrect="off"
-                  style={{
-                    flex: '1 1 0', minWidth: 0,
-                    // Match the breadcrumb links (Crumb = 13px) — this is the
-                    // current crumb, so it's a CrumbCurrent sibling in every
-                    // way but its interactivity (click opens the task menu,
-                    // dbl-click edits), hence not the component itself.
-                    fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 13,
-                    letterSpacing: '0', color: T.ink,
-                    background: 'var(--surface-2)',
-                    border: '1px solid var(--accent)',
-                    borderRadius: 5, padding: '2px 6px', outline: 'none',
-                  }}
+                  // Match the breadcrumb links (Crumb = 13px) — this is the
+                  // current crumb, so it's a CrumbCurrent sibling in every
+                  // way but its interactivity (click opens the task menu,
+                  // dbl-click edits), hence not the component itself.
+                  className="flex-1 min-w-0 font-display font-semibold text-[13px] tracking-normal text-ink bg-surface-2 border border-solid border-accent rounded-[5px] py-0.5 px-1.5 outline-none"
                 />
               ) : (
                 <span
@@ -1469,55 +1591,42 @@ export default function ChatView({
                       setSettingsOpen((v) => !v);
                     }
                   }}
-                  style={{
-                    fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: 13,
-                    letterSpacing: '0', color: T.ink,
-                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    overflowWrap: 'anywhere',
-                    minWidth: 0, flex: '0 1 auto',
-                    cursor: 'pointer',
-                  }}
+                  className="font-display font-semibold text-[13px] tracking-normal text-ink overflow-hidden text-ellipsis whitespace-nowrap [overflow-wrap:anywhere] min-w-0 flex-initial cursor-pointer"
                 >{task.title}</span>
               )}
               {task.pinned && !titleEditing && (
-                <span aria-hidden style={{ display: 'inline-flex', flexShrink: 0, color: T.accent }}>
+                <span aria-hidden className="inline-flex flex-shrink-0 text-accent">
                   {Ico.pin(11)}
                 </span>
               )}
               {!titleEditing && (
-                <button
-                  ref={settingsBtnRef}
-                  type="button"
-                  aria-label="Task menu"
-                  title="Task menu"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (settingsOpen) {
-                      setSettingsOpen(false);
-                      return;
-                    }
-                    const rect = settingsBtnRef.current?.getBoundingClientRect();
-                    setSettingsAnchor(rect || null);
-                    setSettingsOpen(true);
-                  }}
-                  style={{
-                    width: 22, height: 22, borderRadius: 5,
-                    background: settingsOpen ? 'var(--surface-2)' : 'transparent',
-                    border: 0,
-                    color: 'var(--ink-3)',
-                    display: 'inline-grid', placeItems: 'center',
-                    flexShrink: 0,
-                    opacity: titleControlsShown ? 1 : 0,
-                    pointerEvents: titleControlsShown ? 'auto' : 'none',
-                    cursor: 'pointer',
-                    transition: 'opacity .15s ease, color .15s ease, background .15s ease',
-                    WebkitAppRegion: 'no-drag',
-                  }}
-                  onMouseOver={(e) => { e.currentTarget.style.background = 'var(--surface-2)'; e.currentTarget.style.color = 'var(--ink)'; }}
-                  onMouseOut={(e) => { e.currentTarget.style.background = settingsOpen ? 'var(--surface-2)' : 'transparent'; e.currentTarget.style.color = 'var(--ink-3)'; }}
-                >
-                  {Ico.moreVert(13)}
-                </button>
+                <Tooltip content="Task menu">
+                  <button
+                    ref={settingsBtnRef}
+                    type="button"
+                    aria-label="Task menu"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (settingsOpen) {
+                        setSettingsOpen(false);
+                        return;
+                      }
+                      const rect = settingsBtnRef.current?.getBoundingClientRect();
+                      setSettingsAnchor(rect || null);
+                      setSettingsOpen(true);
+                    }}
+                    // Only opacity/pointerEvents (titleControlsShown-driven) stay
+                    // inline — resting/hover background+color moved to className
+                    // so hover: can win (see the rail-toggle button above for why).
+                    style={{
+                      opacity: titleControlsShown ? 1 : 0,
+                      pointerEvents: titleControlsShown ? 'auto' : 'none',
+                    }}
+                    className={`w-[22px] h-[22px] rounded-[5px] border-0 inline-grid place-items-center flex-shrink-0 cursor-pointer transition-[opacity,color,background] duration-150 ease-[ease] [-webkit-app-region:no-drag] text-ink-3 hover:text-ink hover:bg-surface-2 ${settingsOpen ? 'bg-surface-2' : 'bg-transparent'}`}
+                  >
+                    {Ico.moreVert(13)}
+                  </button>
+                </Tooltip>
               )}
             </div>
           </div>
@@ -1526,10 +1635,7 @@ export default function ChatView({
               and rail toggle moved out; pin lives inline with the
               title now (above) so it stays visually attached to the
               task it acts on. */}
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 4,
-            flexShrink: 0,
-          }} />
+          <div className="flex items-center gap-1 flex-shrink-0" />
         </div>
         {/* Task menu — anchored to the kebab next to the title.
             Items: Pin/Unpin · Rename · Delete. Move-to-project,
@@ -1573,20 +1679,12 @@ export default function ChatView({
             `marginBottom: 25` shortens the scroll container so the
             chat surface ends with a calm gap above the window edge
             instead of butting flush against it. */}
-        <div ref={scrollRef} data-scroll="true" className="scroll-clean" style={{
-          minHeight: 0, overflowY: 'auto', overflowX: 'hidden',
-          padding: '32px 28px 180px',
-          marginBottom: 25,
-          background: 'transparent',
-          WebkitAppRegion: 'no-drag',
-          userSelect: 'text',
-        }}>
-          <div style={{
-            maxWidth: 720, margin: '0 auto',
-            display: 'flex', flexDirection: 'column', gap: 28,
-          }}>
-            <Divider label={dividerLabel(new Date())} />
-
+        <div
+          ref={scrollRef}
+          data-scroll="true"
+          className="scroll-clean min-h-0 overflow-y-auto overflow-x-hidden pt-8 px-7 pb-[180px] mb-[25px] bg-transparent [-webkit-app-region:no-drag] select-text"
+        >
+          <div className="max-w-[720px] mx-auto flex flex-col gap-7">
             {(() => {
               // Track the assistant turn index inline so TurnActions
               // knows which user→answer cycle to delete. The walker
@@ -1733,11 +1831,7 @@ export default function ChatView({
                  * while Air is payable, a one-click switch that resends the
                  * failed message on it — never "try again". */
                 if (m.code === 'model_access_denied' || m.code === 'model_disabled') {
-                  let deniedPrevUserText = '';
-                  for (let j = i - 1; j >= 0; j--) {
-                    const c = visibleMessages[j]?.role === 'user' && visibleMessages[j].content;
-                    if (typeof c === 'string' && c) { deniedPrevUserText = c; break; }
-                  }
+                  const deniedPrevUserText = lastUserTextBefore(visibleMessages, i);
                   return (
                     <ModelUnavailableCard
                       key={i}
@@ -1758,11 +1852,7 @@ export default function ChatView({
                 // budget → Retry (resend the last user message), plus a MindsHub
                 // failover nudge for BYOK users (ENG-673).
                 if (m.code === 'provider_overloaded') {
-                  let prevUserText = '';
-                  for (let j = i - 1; j >= 0; j--) {
-                    const c = visibleMessages[j]?.role === 'user' && visibleMessages[j].content;
-                    if (typeof c === 'string' && c) { prevUserText = c; break; }
-                  }
+                  const prevUserText = lastUserTextBefore(visibleMessages, i);
                   return (
                     <ProviderOverloadedCard
                       key={i}
@@ -1776,6 +1866,93 @@ export default function ChatView({
                     />
                   );
                 }
+                // Unknown/removed model alias (gateway 404 `unknown_model`):
+                // credits can't fix it — the next step is picking a different
+                // model in Settings.
+                if (m.code === 'unknown_model') {
+                  return (
+                    <ActionCard
+                      key={i}
+                      time={formatMetaTime(m.createdAt)}
+                      agentLabel={agentLabel}
+                      title="That model isn't available"
+                      body="The selected model was removed or isn't offered anymore. Switch to another model in Settings."
+                      buttons={[
+                        { label: 'Open Settings', onClick: () => onOpenSettings?.('agent'), primary: true },
+                      ]}
+                    />
+                  );
+                }
+                // Unsupported attachment image (`image_format`): the fix is on
+                // the user's side — re-upload as PNG/JPEG — so the card names
+                // it and offers no dead-end buttons.
+                if (m.code === 'image_format') {
+                  return (
+                    <ActionCard
+                      key={i}
+                      time={formatMetaTime(m.createdAt)}
+                      agentLabel={agentLabel}
+                      title="That image couldn't be read"
+                      body="The attached image is in a format the model can't process. Convert it to PNG or JPEG and send it again."
+                    />
+                  );
+                }
+                // Transient billing/policy outage at the gateway
+                // (`policy_unavailable`): retryable and not the user's fault,
+                // so the next step is simply resending the failed message.
+                if (m.code === 'policy_unavailable') {
+                  const retryText = lastUserTextBefore(visibleMessages, i);
+                  return (
+                    <ActionCard
+                      key={i}
+                      time={formatMetaTime(m.createdAt)}
+                      agentLabel={agentLabel}
+                      title="Billing is temporarily unavailable"
+                      body="MindsHub couldn't confirm billing for this request. This is temporary — try again in a moment."
+                      buttons={retryText
+                        ? [{ label: 'Try again', onClick: () => onSend?.(retryText), primary: true }]
+                        : []}
+                    />
+                  );
+                }
+                // Spent FREE monthly allowance (gateway 429
+                // `included_allowance_exhausted`): not a drained wallet, so it
+                // names the reset date as a free alternative and says what
+                // credits actually unlock (ENG-1537).
+                if (m.code === 'included_allowance_exhausted') {
+                  return (
+                    <ActionCard
+                      key={i}
+                      time={formatMetaTime(m.createdAt)}
+                      agentLabel={agentLabel}
+                      title="You've used this month's free tokens"
+                      body={`Your free allowance resets on ${formatAllowanceReset(m.resetAt)}. Add credits to keep working now and unlock Claude, GPT, Gemini, Kimi, DeepSeek and more.`}
+                      buttons={[
+                        { label: 'Add credits', onClick: () => host.openExternal(MINDS_BILLING_URL), primary: true },
+                      ]}
+                    />
+                  );
+                }
+                // Velocity rate-limit (gateway 429 `rate_limited`): waiting is
+                // the fix, so the card says so and offers a time-gated Retry —
+                // never a top-up, which is what this used to show (ENG-1537).
+                if (m.code === 'rate_limited') {
+                  const rlRetryText = lastUserTextBefore(visibleMessages, i);
+                  return (
+                    <RateLimitedCard
+                      key={i}
+                      time={formatMetaTime(m.createdAt)}
+                      agentLabel={agentLabel}
+                      body={m.content}
+                      retryAt={m.retryAt}
+                      onRetry={rlRetryText ? () => onSend?.(rlRetryText) : undefined}
+                    />
+                  );
+                }
+                // `anton_error` and anything unmapped: a deliberately generic
+                // bucket with no known next step, so no card — but still a
+                // failure, rendered as a danger alert so it never reads as a
+                // finished answer. Richer treatment is ENG-1093's review.
                 return (
                   <AnswerTurn key={i} state="done" time={formatMetaTime(m.createdAt)} showActions={false} agentLabel={agentLabel}>
                     <Alert variant="danger">{m.content}</Alert>
@@ -1830,6 +2007,19 @@ export default function ChatView({
                       onActivateStep={(step) => setOpenScratchpadStepId(prefixId(messageKey(m, i), step.id))}
                     />
                   )}
+                  {/* Above the text: a question is asked, then answered, then
+                      (at most) the turn's closing text streams — so the card
+                      always precedes any text that came after the answer. */}
+                  <StepQuestions
+                    steps={m.steps}
+                    conversationId={task.id}
+                    // A completed turn by construction — `visibleMessages`
+                    // excludes the `_streaming` row — so no question rendered
+                    // here belongs to the live turn, whatever else is in flight
+                    // on this conversation.
+                    conversationLive={false}
+                    onAnswered={onQuestionAnswered}
+                  />
                   <TextBlock text={m.content} id={m.id || `msg-${i}`} complete conversationId={task.id} />
                   {m.artifact && (
                     <ArtifactCard
@@ -1866,6 +2056,15 @@ export default function ChatView({
                     onActivateStep={(step) => setOpenScratchpadStepId(prefixId(streamingKey, step.id))}
                   />
                 )}
+                {/* Above the text: a question is asked, then answered, then
+                    (at most) the turn's closing text streams — so the card
+                    always precedes any text that came after the answer. */}
+                <StepQuestions
+                  steps={streamingMsg.steps}
+                  conversationId={task.id}
+                  conversationLive={isStreaming || !!inFlightSet?.has(task.id)}
+                  onAnswered={onQuestionAnswered}
+                />
                 {/* Bridge state: between the first stream event arriving
                     (which strips the activity placeholder) and the first
                     step, thought, or body chunk landing, the AnswerTurn
@@ -1884,7 +2083,7 @@ export default function ChatView({
                   />
                 )}
                 {streamingMsg.content && (
-                  <div style={{ position: 'relative' }}>
+                  <div className="relative">
                     <TextBlock text={streamingMsg.content} id="streaming" complete={false} conversationId={task.id} />
                     <StreamCursor />
                   </div>
@@ -1906,85 +2105,32 @@ export default function ChatView({
             with the gravity-field showing through it read as a dark
             band at the bottom of the chat. The composer's own border +
             shadow give enough visual separation on its own. */}
-        <div className="chat-floating-composer" style={{
-          position: 'absolute', left: 28, right: 28, bottom: 22,
-          display: 'flex', flexDirection: 'column', alignItems: 'center',
-          gap: 8,
-          pointerEvents: 'auto',
-          ['--composer-max-width']: '720px',
-        }}>
+        <div className="chat-floating-composer absolute left-7 right-7 bottom-[22px] flex flex-col items-center gap-2 pointer-events-auto [--composer-max-width:720px]">
           {/* Queued-messages strip — pills with each waiting prompt
               + a × to drop it. The pills cross-fade in/out so the
               transition between queue states reads as deliberate. */}
           {queuedMessages.length > 0 && (
-            <div style={{
-              width: '100%', maxWidth: 720,
-              display: 'flex', flexDirection: 'column',
-              gap: 6,
-              padding: '10px 12px',
-              borderRadius: 14,
-              background: 'color-mix(in srgb, var(--accent) 8%, var(--surface))',
-              border: '1px solid color-mix(in srgb, var(--accent) 22%, var(--line))',
-              boxShadow: '0 8px 24px rgba(0,0,0,0.10)',
-              animation: 'queue-pop-in 220ms cubic-bezier(0.32, 0.72, 0, 1)',
-            }}>
-              <div style={{
-                fontFamily: 'var(--font-mono)', fontSize: 10.5,
-                color: 'var(--accent)', letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-                display: 'flex', alignItems: 'center', gap: 6,
-              }}>
-                <span className="pulse-dot" style={{
-                  width: 6, height: 6, borderRadius: '50%',
-                  background: 'var(--accent)',
-                  boxShadow: '0 0 6px var(--accent-glow)',
-                }} />
+            <div className="w-full max-w-[720px] flex flex-col gap-1.5 py-2.5 px-3 rounded-[14px] bg-[color-mix(in_srgb,var(--accent)_8%,var(--surface))] border border-solid border-[color-mix(in_srgb,var(--accent)_22%,var(--line))] shadow-[0_8px_24px_rgba(0,0,0,0.10)] animate-[queue-pop-in_220ms_cubic-bezier(0.32,0.72,0,1)]">
+              <div className="font-mono text-[10.5px] text-accent tracking-[0.08em] uppercase flex items-center gap-1.5">
+                <span className="pulse-dot w-1.5 h-1.5 rounded-full bg-accent shadow-[0_0_6px_var(--accent-glow)]" />
                 {queuedMessages.length} queued · waiting for {agentLabel || 'Anton'}
               </div>
-              <div style={{
-                display: 'flex', flexWrap: 'wrap', gap: 6,
-              }}>
+              <div className="flex flex-wrap gap-1.5">
                 {queuedMessages.map((q) => (
                   <span
                     key={q.id}
                     title={q.text}
-                    style={{
-                      display: 'inline-flex', alignItems: 'center', gap: 6,
-                      maxWidth: '100%',
-                      padding: '5px 4px 5px 12px',
-                      borderRadius: 999,
-                      background: 'var(--surface)',
-                      border: '1px solid var(--line)',
-                      fontFamily: 'var(--font-body)', fontSize: 12.5,
-                      color: 'var(--ink-2)',
-                      transition: 'background 120ms ease, border-color 120ms ease',
-                    }}
+                    className="inline-flex items-center gap-1.5 max-w-full pt-[5px] pr-1 pb-[5px] pl-3 rounded-full bg-surface border border-solid border-line font-body text-sm text-ink-2 transition-[background,border-color] duration-[120ms] ease-[ease]"
                   >
-                    <span style={{
-                      maxWidth: 360,
-                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    }}>{q.text}</span>
-                    <button
-                      type="button"
-                      onClick={() => onRemoveFromQueue?.(q.id)}
-                      title="Remove from queue"
-                      aria-label="Remove from queue"
-                      style={{
-                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                        width: 20, height: 20, borderRadius: 999,
-                        background: 'transparent', border: 0,
-                        color: 'var(--ink-4)', cursor: 'pointer',
-                        flexShrink: 0,
-                      }}
-                      onMouseOver={(e) => {
-                        e.currentTarget.style.background = 'color-mix(in srgb, var(--danger) 14%, transparent)';
-                        e.currentTarget.style.color = 'var(--danger)';
-                      }}
-                      onMouseOut={(e) => {
-                        e.currentTarget.style.background = 'transparent';
-                        e.currentTarget.style.color = 'var(--ink-4)';
-                      }}
-                    >{Ico.close(11)}</button>
+                    <span className="max-w-[360px] overflow-hidden text-ellipsis whitespace-nowrap">{q.text}</span>
+                    <Tooltip content="Remove from queue">
+                      <button
+                        type="button"
+                        onClick={() => onRemoveFromQueue?.(q.id)}
+                        aria-label="Remove from queue"
+                        className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-transparent border-0 text-ink-4 cursor-pointer flex-shrink-0 hover:bg-[color-mix(in_srgb,var(--danger)_14%,transparent)] hover:text-danger"
+                      >{Ico.close(11)}</button>
+                    </Tooltip>
                   </span>
                 ))}
               </div>
@@ -2022,72 +2168,56 @@ export default function ChatView({
       {isNarrow && (
         <div
           onClick={() => setRailNarrowOpen(false)}
+          className="fixed inset-0 z-50 bg-[rgba(0,0,0,0.35)] backdrop-blur-[2px] transition-opacity duration-[280ms] ease-[cubic-bezier(0.32,0.72,0,1)] [-webkit-app-region:no-drag]"
           style={{
-            position: 'fixed', inset: 0, zIndex: 50,
-            background: 'rgba(0,0,0,0.35)',
-            backdropFilter: 'blur(2px)',
             opacity: railOverlayOpen ? 1 : 0,
             pointerEvents: railOverlayOpen ? 'auto' : 'none',
-            transition: 'opacity 280ms cubic-bezier(0.32, 0.72, 0, 1)',
-            WebkitAppRegion: 'no-drag',
           }}
         />
       )}
-      <aside className="chat-rail-aside" style={isNarrow ? {
-        // Narrow: fixed overlay that slides in from the right
-        position: 'fixed',
-        top: 9, bottom: 9, right: 9,
-        width: 'min(85vw, 320px)',
-        zIndex: 51,
-        background: 'var(--surface)',
-        border: '1px solid var(--line)',
-        borderRadius: 14,
-        boxShadow: 'var(--sh-2)',
-        transform: railOverlayOpen ? 'translateX(0)' : 'translateX(calc(100% + 18px))',
-        transition: 'transform 380ms cubic-bezier(0.22, 1, 0.36, 1)',
-        padding: '14px 14px 22px',
-        display: 'flex', flexDirection: 'column', gap: 10,
-        overflowX: 'hidden', overflowY: 'auto',
-        WebkitAppRegion: 'no-drag',
-      } : {
-        // Wide: inline grid column
-        background: 'transparent',
-        padding: '14px 14px 22px',
-        visibility: effectiveRailOpen ? 'visible' : 'hidden',
-        opacity: effectiveRailOpen ? 1 : 0,
-        transition: 'opacity 180ms ease',
-        display: 'flex', flexDirection: 'column', gap: 10,
-        overflowX: 'hidden',
-        overflowY: 'auto',
-        minWidth: 0,
-        WebkitAppRegion: 'no-drag',
-      }}>
+      <aside
+        // Narrow: fixed overlay that slides in from the right.
+        // Wide: inline grid column.
+        className={`chat-rail-aside flex flex-col gap-2.5 pt-3.5 px-3.5 pb-[22px] overflow-x-hidden overflow-y-auto [-webkit-app-region:no-drag] ${
+          isNarrow
+            ? 'fixed top-[9px] bottom-[9px] right-[9px] w-[min(85vw,320px)] z-[51] bg-surface border border-solid border-line rounded-[14px] shadow-sh-2 transition-transform duration-[380ms] ease-[cubic-bezier(0.22,1,0.36,1)]'
+            : 'bg-transparent min-w-0 transition-opacity duration-[180ms] ease-[ease]'
+        }`}
+        style={isNarrow ? {
+          transform: railOverlayOpen ? 'translateX(0)' : 'translateX(calc(100% + 18px))',
+        } : {
+          visibility: effectiveRailOpen ? 'visible' : 'hidden',
+          opacity: effectiveRailOpen ? 1 : 0,
+        }}
+      >
         {/* Rail header bar — collapse button. Stays visible on mobile
             so the user has an explicit way to dismiss the rail (which
             on phone hosts the data-vault form fullscreen). The
             FLOATING expand button outside is the one hidden via
             .chat-rail-toggle in globals.css. */}
-        <div className="chat-rail-close-row" style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
-          flexShrink: 0,
-        }}>
-          <button
-            type="button"
-            className="chat-rail-close"
-            onClick={() => isNarrow ? setRailNarrowOpen(false) : setRailOpen(false)}
-            title="Collapse panel"
-            aria-label="Collapse panel"
-            style={{
-              all: 'unset', cursor: 'pointer',
-              width: 26, height: 26, borderRadius: 6,
-              display: 'inline-grid', placeItems: 'center',
-              color: T.ink3,
-            }}
-            onMouseOver={(e) => { e.currentTarget.style.color = 'var(--ink)'; e.currentTarget.style.background = 'var(--surface-2)'; }}
-            onMouseOut={(e) => { e.currentTarget.style.color = 'var(--ink-3)'; e.currentTarget.style.background = 'transparent'; }}
-          >
-            {Ico.panelCollapseRight(15)}
-          </button>
+        <div className="chat-rail-close-row flex items-center justify-end flex-shrink-0">
+          <Tooltip content="Collapse panel">
+            <button
+              type="button"
+              className="chat-rail-close"
+              onClick={() => isNarrow ? setRailNarrowOpen(false) : setRailOpen(false)}
+              aria-label="Collapse panel"
+              // kept inline: same all:unset cascade-priority reason as ArtifactCard's
+              // buttons — every property here stays co-located with the reset, and
+              // the hover color/background mutation needs a subsequent inline write
+              // to win over the reset.
+              style={{
+                all: 'unset', cursor: 'pointer',
+                width: 26, height: 26, borderRadius: 6,
+                display: 'inline-grid', placeItems: 'center',
+                color: T.ink3,
+              }}
+              onMouseOver={(e) => { e.currentTarget.style.color = 'var(--ink)'; e.currentTarget.style.background = 'var(--surface-2)'; }}
+              onMouseOut={(e) => { e.currentTarget.style.color = 'var(--ink-3)'; e.currentTarget.style.background = 'transparent'; }}
+            >
+              {Ico.panelCollapseRight(15)}
+            </button>
+          </Tooltip>
         </div>
         <ProgressBox
           steps={railSteps}
@@ -2139,27 +2269,16 @@ export default function ChatView({
           overlay so it's front-and-center when a connector is picked. */}
       {formActive && createPortal(
         <div
-          onClick={() => clearDataVaultForm(task?.id || '')}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 200,
-            background: 'rgba(0, 0, 0, 0.5)',
-            backdropFilter: 'blur(3px)',
-            WebkitBackdropFilter: 'blur(3px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
+          onClick={() => (onDismissConnectForm
+            ? onDismissConnectForm(task?.id || '')
+            : clearDataVaultForm(task?.id || ''))}
+          // autoprefixer adds the -webkit-backdrop-filter prefix at build time,
+          // so no separate WebkitBackdropFilter declaration is needed here.
+          className="fixed inset-0 z-[200] bg-[rgba(0,0,0,0.5)] backdrop-blur-[3px] flex items-center justify-center"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{
-              width: 'min(90vw, 460px)',
-              maxHeight: '85vh',
-              overflowY: 'auto',
-              borderRadius: 12,
-            }}
+            className="w-[min(90vw,460px)] max-h-[85vh] overflow-y-auto rounded-xl"
           >
             <FormErrorBoundary>
               <DataVaultFormPanel
@@ -2167,6 +2286,7 @@ export default function ChatView({
                 onContinue={(payload) => onSend?.(payload?.text || '[form action]')}
                 onSubmit={onSubmitDataVaultForm}
                 onNavigateToConnectors={onNavigateToConnectors}
+                onClose={onDismissConnectForm}
               />
             </FormErrorBoundary>
           </div>
