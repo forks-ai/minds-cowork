@@ -12,6 +12,7 @@ import { forwardRef, useEffect, useLayoutEffect, useMemo, useRef, useState, useS
 import { createPortal } from 'react-dom';
 import Ico from '../components/Icons';
 import Composer from '../components/Composer';
+import CodingTerminal from '../components/CodingTerminal';
 import { Alert, Card, Tooltip } from '../components/ui';
 import { MarkdownContent } from '../components/markdown/MarkdownContent';
 import { ThinkingBlock } from '../components/thinking/ThinkingBlock';
@@ -36,6 +37,8 @@ import { Crumb as CrumbButton, CrumbSep } from '../components/ui/Crumb';
 import { useBreakpoint } from '../hooks/useBreakpoint';
 import { useRevealOnHover } from '../hooks/useRevealOnHover';
 import { harnessLabel } from '../lib/agentLabel';
+import { artifactOpenTarget, isArtifactActionAvailable } from '../lib/artifactActions';
+import { useOrgMode } from '../../lib/orgMode';
 import { modelLabel } from '../lib/settingsTransform';
 import { providerOverloadedButtons } from '../lib/turnErrorActions';
 import { isSkippedFailedAssistant, isOrphanUser as isOrphanUserPure, lastVisibleTurnIdx } from '../lib/turnVisibility';
@@ -431,6 +434,15 @@ function artifactStepToCard(step, projectPath) {
     path,
     file_path: path,
     ext: ext ? `.${ext}` : '',
+    // Second hand-written field list this card passes through (the adapter's
+    // step.data is the first). Both have to carry identity and publish state or
+    // the card cannot open, address or delete the artifact in org mode, where
+    // there is no path-based fallback to hide the omission.
+    id: data.id || '',
+    slug: data.slug || '',
+    publishedUrl: data.publishedUrl || '',
+    projectId: data.projectId || '',
+    projectName: data.projectName || '',
     preview: [],
   }, projectPath);
   return {
@@ -513,6 +525,11 @@ function StepSkills({ steps, latestByKey, messageIndex, projectName }) {
 }
 
 function ArtifactCard({ artifact, onOpen }) {
+  // This card is an artifact surface like the panel's rows, so it answers to the
+  // same deployment gate. Without it the chat offered a local preview, Export
+  // and Show in Finder for content an org deployment does not serve, while the
+  // panel had already stopped offering them for the very same artifact.
+  const orgMode = useOrgMode();
   const [status, setStatus] = useState(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -553,10 +570,18 @@ function ArtifactCard({ artifact, onOpen }) {
   const isInlineText = _INLINE_TEXT_EXTS.includes(lcExt)
     || _INLINE_TEXT_EXTS.some((e) => lcPath.endsWith(e));
   const canPreviewInline = isHtml || isInlineText;
+  const published = !!artifact.publishedUrl;
+  const openTarget = artifactOpenTarget({
+    orgMode, published, canPreviewInline, hasBridge: host.isElectron || !host.isWeb,
+  });
   // Document artifacts (markdown/HTML/text) can be exported to PDF/Word/HTML.
   const _EXPORTABLE_EXTS = ['.md', '.markdown', '.html', '.htm', '.txt'];
   const canExport = canAct
+    && isArtifactActionAvailable('export', { orgMode, hasBridge: !host.isWeb, published })
     && (_EXPORTABLE_EXTS.includes(lcExt) || _EXPORTABLE_EXTS.some((e) => lcPath.endsWith(e)));
+  const canReveal = isArtifactActionAvailable('reveal', {
+    orgMode, hasBridge: host.isElectron, published,
+  });
   const handleExport = async (fmt) => {
     setExportOpen(false);
     if (!canAct) {
@@ -582,11 +607,24 @@ function ArtifactCard({ artifact, onOpen }) {
     }
   };
   const handleOpen = async () => {
+    if (openTarget === 'published') {
+      // The published URL is the ONLY route to this artifact's bytes on an org
+      // deployment, and it carries the access check.
+      try { host.openExternal(artifact.publishedUrl); }
+      catch { window.open(artifact.publishedUrl, '_blank', 'noreferrer'); }
+      return;
+    }
+    if (openTarget === null) {
+      showStatus('error', orgMode
+        ? 'This artifact has no published link yet.'
+        : (disabledReason || 'No artifact file path is available.'));
+      return;
+    }
     if (!canAct) {
       showStatus('error', disabledReason || 'No artifact file path is available.');
       return;
     }
-    if (canPreviewInline && onOpen) {
+    if (openTarget === 'preview' && onOpen) {
       onOpen(artifact);
       return;
     }
@@ -737,16 +775,23 @@ function ArtifactCard({ artifact, onOpen }) {
             )}
           </div>
         )}
-        {!host.isWeb && (
+        {!host.isWeb && canReveal && (
           <Tooltip content={canAct ? `${revealLabel}: ${path}` : ''}>
             <SmallBtn disabled={!canAct} onClick={handleReveal} title={canAct ? undefined : (disabledReason || 'No file path')}>
               {revealLabel}
             </SmallBtn>
           </Tooltip>
         )}
-        {(!host.isWeb || isHtml) && (
-          <Tooltip content={canAct ? `Open ${path}` : ''}>
-            <SmallBtn primary disabled={!canAct} onClick={handleOpen} title={canAct ? undefined : (disabledReason || 'No file path')}>
+        {/* Org mode drops the file-path conditions entirely: there the button
+            opens the published URL, which has no local path behind it. */}
+        {(orgMode ? openTarget === 'published' : (!host.isWeb || isHtml)) && (
+          <Tooltip content={orgMode ? 'Open the published artifact' : (canAct ? `Open ${path}` : '')}>
+            <SmallBtn
+              primary
+              disabled={!orgMode && !canAct}
+              onClick={handleOpen}
+              title={(orgMode || canAct) ? undefined : (disabledReason || 'No file path')}
+            >
               Open
             </SmallBtn>
           </Tooltip>
@@ -1156,6 +1201,13 @@ export default function ChatView({
   onBack,
   project,
   model,
+  onModelChange,
+  // Full catalog for the model picker (ENG-1656: task view can change its
+  // model, not just display it). Falls back to a single-item list of just
+  // the current model when omitted, so existing callers/tests that don't
+  // pass these keep working exactly as before — a flat, unpickable menu.
+  models,
+  modelMeta,
   attachments,
   connectors,
   onAttachFiles,
@@ -1180,6 +1232,9 @@ export default function ChatView({
   onOpenProject,
   onOpenProjectsList,
   onOpenSettings,
+  codingModelDefault,
+  harnessHermesEnabled,
+  harnessClaudeCodeEnabled,
   onStop,
   projects = [],
   // Messages the user typed while Anton was mid-turn. Displayed as
@@ -1276,6 +1331,13 @@ export default function ChatView({
   // useSyncExternalStore keeps this in sync without useEffect: React
   // re-reads the snapshot whenever the formStore notifies subscribers.
   const taskId = task?.id || '';
+  // Coding mode (ENG-1656 follow-up): a claude-code-harness task never goes
+  // through anton's chat pipeline — it embeds a live PTY terminal instead of
+  // the message transcript + Composer (see CodingTerminal / coding-terminal.ts).
+  const isClaudeCodeTask = task?.harness === 'claude-code';
+  // Hermes has no memory system of its own — the Context rail's Project/
+  // Global memory sections are an Anton concept and don't apply.
+  const isHermesTask = task?.harness === 'hermes';
   const subscribeFormStore = useMemo(
     () => (onChange) => subscribeDataVaultForm(taskId, onChange),
     [taskId],
@@ -1669,6 +1731,15 @@ export default function ChatView({
           }}
         />
 
+        {isClaudeCodeTask ? (
+          <CodingTerminal
+            taskId={task.id}
+            projectPath={artifactProjectPath}
+            message={task.messages?.[0]?.content}
+            model={typeof model === 'string' ? model : model?.id}
+          />
+        ) : (
+        <>
         {/* Scrollable conversation.
             Bottom padding clears the floating composer so every
             message is reachable when scrolled to the end. Sized
@@ -1866,17 +1937,46 @@ export default function ChatView({
                     />
                   );
                 }
-                // Unknown/removed model alias (gateway 404 `unknown_model`):
-                // credits can't fix it — the next step is picking a different
-                // model in Settings.
-                if (m.code === 'unknown_model') {
+                /* A model the provider can't serve (404 `model_not_found`) —
+                 * removed, renamed, or never existed (a provider name pasted
+                 * where an alias belongs). Credits can't fix it; the next step
+                 * is picking a real model.
+                 *
+                 * The body quotes the RAW id, not modelLabel's prettified
+                 * version: the point is for the user to recognise the exact
+                 * string sitting in their settings, and prettifying an id that
+                 * isn't a real model would obscure the typo (ENG-1358).
+                 * `failedModel` is absent from a server too old to send it, so
+                 * the copy degrades to the unnamed wording rather than
+                 * rendering an empty quote. */
+                /* `unknown_model` is the pre-rename code. Accept BOTH: the
+                 * renderer updates OTA and can lead a pinned server (a server
+                 * update isn't always pending, so updater.ts applies the UI
+                 * alone), and dropping the old code would regress those users to
+                 * the buttonless danger alert ENG-1282 removed. It also covers
+                 * disabled-auto-update and git-pinned installs, which no
+                 * minServerVersion bump would reach. */
+                if (m.code === 'model_not_found' || m.code === 'unknown_model') {
+                  const badModel = typeof m.failedModel === 'string' ? m.failedModel.trim() : '';
                   return (
                     <ActionCard
                       key={i}
                       time={formatMetaTime(m.createdAt)}
                       agentLabel={agentLabel}
-                      title="That model isn't available"
-                      body="The selected model was removed or isn't offered anymore. Switch to another model in Settings."
+                      title={badModel ? `"${badModel}" isn't a model we can use` : "That model isn't available"}
+                      body={badModel
+                        ? `Your settings point at "${badModel}", which this provider doesn't offer — so nothing was sent. Pick a model from the list in Settings.`
+                        : "The selected model was removed or isn't offered anymore. Switch to another model in Settings."}
+                      // Open Settings only. A "Switch to MindsHub Air" button was
+                      // tried here and removed: it routes through
+                      // handleSendInTask's `modelOverride`, which the in-process
+                      // harness ignores entirely (stream_response takes no
+                      // `model` — harness.py), so the turn would rerun on the
+                      // same dead id while the composer chip claimed otherwise.
+                      // The neighbouring model-denial card has the same latent
+                      // problem; making that switch real is a product decision
+                      // (it means writing the global planning_model setting),
+                      // tracked separately rather than faked here.
                       buttons={[
                         { label: 'Open Settings', onClick: () => onOpenSettings?.('agent'), primary: true },
                       ]}
@@ -2141,9 +2241,10 @@ export default function ChatView({
             project={project}
             onProjectChange={() => {}}
             model={model}
-            onModelChange={() => {}}
+            onModelChange={onModelChange || (() => {})}
             projects={[]}
-            models={model ? [model] : []}
+            models={models || (model ? [model] : [])}
+            modelMeta={modelMeta}
             attachments={attachments}
             connectors={connectors}
             onNavigateToConnectors={onNavigateToConnectors}
@@ -2155,12 +2256,19 @@ export default function ChatView({
             onRemoveAttachment={onRemoveAttachment}
             placeholder="Reply…"
             metaReadOnly
+            modelReadOnly={false}
             hideMeta
             streaming={isStreaming}
             onStop={onStop}
             prefill={composerPrefill}
+            onOpenSettings={onOpenSettings}
+            codingModelDefault={codingModelDefault}
+            harnessHermesEnabled={harnessHermesEnabled}
+            harnessClaudeCodeEnabled={harnessClaudeCodeEnabled}
           />
         </div>
+        </>
+        )}
       </div>
 
       {/* ─── Right rail ─── */}
@@ -2235,6 +2343,7 @@ export default function ChatView({
           project={project}
           conversationId={task?.id}
           refreshKey={contextRefreshKey}
+          showMemory={!isHermesTask}
           onAddGoogleDriveFiles={onAddGoogleDriveProjectFiles}
           onFetchGoogleDriveFiles={onFetchGoogleDriveProjectFiles}
           onRemoveGoogleDriveFile={onRemoveGoogleDriveProjectFile}

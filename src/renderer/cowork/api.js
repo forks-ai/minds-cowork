@@ -8,7 +8,8 @@ import { initialStreamState, reduceStream, iterateSSE } from './lib/responseStre
 import { isAntonConfigError } from './lib/antonErrors';
 import { host } from '../platform/host';
 import { relativeAge } from './lib/formatTime';
-import { transformSettingsRows, diffSettingsForWrite, mergeRecommendedModels } from './lib/settingsTransform';
+import { transformSettingsRows, diffSettingsForWrite, mergeRecommendedModels, CLIENT_TO_SERVER } from './lib/settingsTransform';
+import { MODEL_ROUTER_ID } from './lib/modelCatalog';
 import { cacheSettings } from './lib/settingsCache';
 import {
   buildMemoryDeletePayload,
@@ -248,7 +249,8 @@ function _conversationToTask(conv, messages = []) {
     projectName: conv.project || null,
     projectId: conv.project_id || null,
     projectPath: conv.project_path || null,
-    model: null,
+    harness: conv.harness || null,
+    model: conv.model || null,
     attachments: [],
     disabledConnections,
     pinned: false,
@@ -275,6 +277,16 @@ export async function fetchConversationList() {
   } catch {
     return [];
   }
+}
+
+/** Create a task record directly (bypassing the `/responses` stream) — used
+ * by coding-mode (MVP): the actual work happens in an external CLI, but the
+ * task should still show up with its harness/model recorded. */
+export async function createConversation({ project, projectId, topic, harness, model } = {}) {
+  return req('/conversations/', {
+    method: 'POST',
+    body: JSON.stringify({ project, projectId, topic, harness, model }),
+  });
 }
 
 export async function fetchSessions() {
@@ -342,7 +354,7 @@ export function allocateConversationId() {
 // callback shape the rest of the app already speaks. `conversationId` is
 // optional — omit it to start a new conversation; the caller learns the
 // new id via the first onChunk/onProgress/onDone callback's second arg.
-function _streamResponse(text, { conversationId, projectName, projectId, projectPath, model, attachmentIds = [], disabledConnections, onChunk, onProgress, onToolResult, onDone, onError, onEvent } = {}) {
+function _streamResponse(text, { conversationId, projectName, projectId, projectPath, model, harness, attachmentIds = [], disabledConnections, onChunk, onProgress, onToolResult, onDone, onError, onEvent } = {}) {
   const ctrl = new AbortController();
   (async () => {
     try {
@@ -351,7 +363,17 @@ function _streamResponse(text, { conversationId, projectName, projectId, project
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           input: text,
-          model: model || null,
+          // MODEL_ROUTER_ID never leaves the renderer — it's how the
+          // composer represents "let this account's Settings decide"
+          // (modelCatalog.js). The server already treats a null/absent
+          // model as exactly that.
+          model: (model && model !== MODEL_ROUTER_ID) ? model : null,
+          // The composer's per-task harness pick (ENG-1656 follow-up) —
+          // overrides the account-wide harness setting for this
+          // conversation only. Omitted (server keeps the account default)
+          // when the caller doesn't pass one, e.g. an in-task reply, where
+          // the harness pill never shows.
+          ...(harness ? { harness } : {}),
           stream: true,
           conversation: conversationId || null,
           // Server's `project` field is a project NAME (folder under
@@ -712,10 +734,18 @@ export async function unpublishArtifact(path) {
   return res.json();
 }
 
-export async function deleteArtifact(path) {
-  const res = await authFetch(BASE + `/artifacts/?path=${encodeURIComponent(path)}`, {
-    method: 'DELETE',
-  });
+// Accepts the artifact card, not a path: org mode addresses artifacts by slug
+// within a project, desktop still by path. Keeping the choice here means call sites
+// don't each have to branch on the mode. A bare string is still accepted so any
+// stray caller keeps working on desktop.
+export async function deleteArtifact(artifact) {
+  const url = artifact?.projectId && artifact?.slug
+    ? `/artifacts/${encodeURIComponent(artifact.slug)}`
+      + `?project_id=${encodeURIComponent(artifact.projectId)}`
+    : `/artifacts/?path=${encodeURIComponent(
+        typeof artifact === 'string' ? artifact : (artifact?.folder || artifact?.path || ''),
+      )}`;
+  const res = await authFetch(BASE + url, { method: 'DELETE' });
   if (!res.ok) {
     let detail = '';
     try { detail = (await res.json())?.detail || ''; } catch {}
@@ -917,17 +947,20 @@ export async function setActiveProject(projectOrName) {
 // the `dedupe` wrapper that meant N copies of the same request on
 // every list render. With coalescing, one network request fans out
 // to all subscribers and the cache entry releases on settle.
-export async function fetchArtifacts({ projectPath } = {}) {
-  // `projectPath` scopes the response to one project's
-  // `<base>/artifacts/` tree. Used by the project-detail rail card
-  // so the response is small and the server skips reading every
-  // other project's metadata.json. Omit it (or pass undefined) for
-  // the system-wide list the global Live Artifacts page wants.
-  const suffix = projectPath
-    ? `?project_path=${encodeURIComponent(projectPath)}`
-    : '';
-  // Dedupe key includes the path so a global fetch and a scoped
-  // fetch don't share an in-flight promise.
+export async function fetchArtifacts({ projectId, projectPath } = {}) {
+  // Either parameter scopes the response to one project's `<base>/artifacts/`
+  // tree, so the server skips reading every other project's metadata.json. Omit
+  // both for the system-wide list the global Live Artifacts page wants.
+  //
+  // `projectId` is the org-mode addressing: the server resolves the project
+  // through a scoped DB read, so no filesystem path crosses the wire (and a path
+  // would carry no tenant for it to check). `projectPath` stays for desktop, where
+  // the client legitimately knows it; org deployments reject it outright.
+  let suffix = '';
+  if (projectId) suffix = `?project_id=${encodeURIComponent(projectId)}`;
+  else if (projectPath) suffix = `?project_path=${encodeURIComponent(projectPath)}`;
+  // Dedupe key includes the suffix so a global fetch and a scoped fetch don't
+  // share an in-flight promise.
   return dedupe(`artifacts${suffix}`, async () => {
     try {
       return await req(`/artifacts/${suffix}`);
@@ -1118,6 +1151,37 @@ export async function updateSettings(patch) {
     const writes = diffSettingsForWrite(patch, _lastFetchedSettings);
     const keys = Object.keys(writes);
     let updated = keys;
+
+    // A `null` in the patch is a tombstone: clear the stored row entirely so
+    // the server's own resolution (enabled-aware defaults) governs the key
+    // again — deliberately NOT a `''` write, which creates a permanent empty
+    // row the raw readers and apply_model_defaults mishandle (ENG-1632).
+    // Tombstones run BEFORE the bulk PUT: the PUT is what repoints providers,
+    // and a repointed provider with the old provider's model row left behind
+    // misroutes every turn — with no retry path, because the next save's
+    // repoint guard sees a matching provider and never re-attempts the
+    // DELETE. Deleting first leaves only consistent, retryable states: a
+    // failed DELETE aborts the save before anything is repointed, and a
+    // failed PUT after the DELETEs leaves the untouched provider on its own
+    // server-side default. Only 404 (no row to clear — the fetched value was
+    // the server's resolved default) and 400 (a pre-ENG-660 server that
+    // doesn't know the key) are skipped; anything else surfaces like the
+    // PUT's own failures. The `k in _lastFetchedSettings` gate skips servers
+    // that never served the key at all (mirrors the BUDGET_FIELDS
+    // absent-key rule).
+    const tombstones = Object.keys(patch).filter(
+      (k) => patch[k] === null && CLIENT_TO_SERVER[k] && k in _lastFetchedSettings,
+    );
+    for (const k of tombstones) {
+      try {
+        await req(`/settings/${encodeURIComponent(CLIENT_TO_SERVER[k])}`, { method: 'DELETE' });
+      } catch (err) {
+        if (err?.status === 400 || err?.status === 404) continue;
+        const e = new Error(`Failed to save settings: ${err?.message || String(err)}`);
+        e.failed = [k];
+        throw e;
+      }
+    }
 
     if (keys.length > 0) {
       // One transactional bulk write: the server applies every key or none, so
@@ -1643,6 +1707,13 @@ export async function setupChannel(channelType) {
 
 export async function teardownChannel(channelType) {
   return req(`/channels/${enc(channelType)}/teardown`, { method: 'POST' });
+}
+
+// Calls the platform with the STORED credentials — proof they actually
+// authenticate, not just that every required field has some value typed in.
+// Gate on capabilities.supports_verify.
+export async function testChannelConnection(channelType) {
+  return req(`/channels/${enc(channelType)}/test-connection`, { method: 'POST' });
 }
 
 // ── Channel bindings (wire an external chat/thread to a project/conversation) ──
