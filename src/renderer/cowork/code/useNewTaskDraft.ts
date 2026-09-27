@@ -294,6 +294,9 @@ export function useNewTaskDraft({
     if (workspaceIssue) return workspaceIssue;
     if (executionIssue) return executionIssue;
     if (!selectedEngineAvailable) return selectedEngine?.reason || (catalogError ? '' : 'No coding agent is available.');
+    /* An admin's model rule is not something credits unlock, so it never
+       mentions them. */
+    if (selectedModelOption?.restricted) return 'An admin restricted this model. Choose another model.';
     if (selectedModelOption?.locked) return 'Add credits or choose an available model.';
     if (!selectedModelValid || enabledModelOptions.length === 0) return '';
     if (!prompt.trim()) return '';
@@ -366,6 +369,7 @@ export function useNewTaskDraft({
     availableEngines,
     engineCommands: selectedEngine?.commands || [],
     engineLabel: selectedEngine?.label || engineId,
+    supportsPlanning: selectedEngine?.features?.planning === 'supported',
     attachFiles,
     standaloneFolderPath,
     standaloneFolderName: folderName(standaloneFolderPath),
